@@ -12,6 +12,7 @@ from src.core.image_processing import generate_white_base, prepare_image_for_pro
 from src.core import mesh as mesh_rules
 from src.core import color, output, tone
 from src.core import simulate as sim
+from src.core import input as doc_input
 from src.core.job import JobSettings
 from src.core.screening import adjust_levels, halftone
 from src.core.separation import render
@@ -469,6 +470,99 @@ class CoreTests(unittest.TestCase):
             window.view_mode_combo.setCurrentIndex(index)
         window.step_slider.setValue(1)
         self.assertIn("Base blanca", window.step_label.text())
+        window.close()
+
+    def test_cmyk_image_is_converted_with_its_profile(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "cmyk.tif")
+            Image.new("CMYK", (20, 10), (0, 255, 255, 0)).save(path, dpi=(240, 240))  # rojo de proceso
+            document = doc_input.load_document(path)
+        r, g, b = document.bgr[5, 5][::-1]
+        self.assertGreater(r, 180)
+        self.assertLess(g, 90)
+        self.assertEqual(document.dpi, 240)
+        self.assertTrue(any("CMYK" in note for note in document.notes))
+
+    def test_png_transparency_and_psd_composite_load(self):
+        from psd_tools import PSDImage
+        rgba = Image.new("RGBA", (30, 20), (0, 0, 0, 0))
+        rgba.paste((200, 30, 40, 255), (5, 5, 25, 15))
+        with tempfile.TemporaryDirectory() as folder:
+            png = os.path.join(folder, "logo.png")
+            rgba.save(png)
+            psd = os.path.join(folder, "logo.psd")
+            PSDImage.frompil(rgba.convert("RGB")).save(psd)
+            png_doc = doc_input.load_document(png)
+            psd_doc = doc_input.load_document(psd)
+        self.assertEqual(png_doc.alpha[0, 0], 0)
+        self.assertEqual(png_doc.alpha[10, 10], 255)
+        self.assertEqual(psd_doc.source_type, "PSD")
+        self.assertEqual(tuple(psd_doc.bgr[10, 10][::-1]), (200, 30, 40))
+
+    def test_vector_documents_are_rasterized_at_the_requested_dpi(self):
+        import fitz
+        with tempfile.TemporaryDirectory() as folder:
+            pdf_path = os.path.join(folder, "arte.pdf")
+            doc = fitz.open()
+            page = doc.new_page(width=72, height=144)          # 1 × 2 pulgadas
+            page.draw_rect(fitz.Rect(18, 18, 54, 54), color=(1, 0, 0), fill=(1, 0, 0))
+            doc.new_page(width=72, height=72)
+            doc.save(pdf_path)
+            ai_path = os.path.join(folder, "arte.ai")
+            with open(pdf_path, "rb") as src, open(ai_path, "wb") as dst:
+                dst.write(src.read())
+            svg_path = os.path.join(folder, "arte.svg")
+            with open(svg_path, "w") as f:
+                f.write('<svg xmlns="http://www.w3.org/2000/svg" width="72pt" height="72pt">'
+                        '<rect x="0" y="0" width="72" height="72" fill="#00ff00"/></svg>')
+            pdf_doc = doc_input.load_document(pdf_path, dpi=300)
+            ai_doc = doc_input.load_document(ai_path, dpi=150)
+            svg_doc = doc_input.load_document(svg_path, dpi=100)
+            pages = doc_input.page_count(pdf_path)
+        self.assertEqual(pdf_doc.bgr.shape[:2], (600, 300))
+        self.assertEqual(tuple(pdf_doc.bgr[150, 150]), (0, 0, 255))
+        self.assertEqual(ai_doc.bgr.shape[:2], (300, 150))
+        self.assertEqual(svg_doc.bgr[50, 50][1], 255)
+        self.assertEqual(pages, 2)
+
+    def test_eps_loads_with_ghostscript(self):
+        from PIL import EpsImagePlugin
+        if not EpsImagePlugin.has_ghostscript():
+            self.skipTest("Ghostscript no instalado")
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "arte.eps")
+            Image.new("RGB", (36, 36), (0, 0, 255)).save(path)
+            document = doc_input.load_document(path, dpi=144)
+        self.assertEqual(document.source_type, "EPS")
+        self.assertGreater(document.bgr[..., 0].mean(), 200)
+
+    def test_resolution_advice_uses_the_final_size(self):
+        settings = JobSettings(fit_to_paper=True, paper_width_mm=254, paper_height_mm=254, lpi=60)
+        level, message = doc_input.resolution_advice((1000, 1000), 72, settings)   # 100 dpi en 10", ideal 120
+        self.assertEqual(level, "aviso")
+        self.assertIn("100 dpi", message)
+        self.assertEqual(doc_input.resolution_advice((3000, 3000), 72, settings)[0], "ok")
+        self.assertEqual(doc_input.resolution_advice((500, 500), 72, settings)[0], "riesgo")
+
+    def test_opening_a_pdf_after_a_transparent_png_resets_alpha(self):
+        import fitz
+        window = SimpleHalftoneApp()
+        with tempfile.TemporaryDirectory() as folder:
+            png = os.path.join(folder, "a.png")
+            Image.new("RGBA", (50, 50), (0, 0, 0, 0)).save(png)
+            png_alpha_shape = (50, 50)
+            pdf = os.path.join(folder, "b.pdf")
+            doc = fitz.open()
+            page = doc.new_page(width=72, height=72)
+            page.draw_rect(fitz.Rect(0, 0, 72, 72), color=(0, 0, 1), fill=(0, 0, 1))
+            doc.save(pdf)
+            window.load_image_file(png)
+            self.assertEqual(window.image_alpha.shape, png_alpha_shape)
+            window.load_image_file(pdf)
+        # PDF con arte a sangre: opaco, sin el alfa del PNG anterior
+        self.assertIsNone(window.image_alpha)
+        window.process_cmyk()
+        self.assertIn("C", window.preview_cache)
         window.close()
 
     def test_rotate_image_preserves_color_images(self):

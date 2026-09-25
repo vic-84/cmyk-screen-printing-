@@ -40,6 +40,7 @@ from ..core.screening import halftone, screen_channel
 from ..core.separation import render
 from ..core import mesh as mesh_rules
 from ..core import output
+from ..core import input as doc_input
 from ..core import simulate as sim
 from ..core.simulate import INK_TYPES, SUBSTRATE_PROFILES
 from ..core.color import detect_palette, lab_to_rgb, match_library, read_library, rgb_to_lab, write_ase
@@ -1148,6 +1149,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.lpi_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.mesh_spin.valueChanged.connect(self.update_moire_analysis)
         self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
+        self.lpi_combo.currentTextChanged.connect(lambda *_: self.update_resolution_advice())
+        self.fit_format_cb.stateChanged.connect(lambda *_: self.update_resolution_advice())
+        self.print_format_combo.currentIndexChanged.connect(lambda *_: self.update_resolution_advice())
         self.ink_limit_spin.valueChanged.connect(self.schedule_reseparation)
         for control in (self.trap_spin, self.spot_softness_spin):
             control.valueChanged.connect(self.schedule_reseparation)
@@ -1380,175 +1384,21 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 self.update_preview()
 
     def load_image_or_pdf(self):
-        """
-        Abre un diálogo para que el usuario seleccione un archivo de imagen o PDF,
-        lo carga y actualiza la interfaz.
-        Esta versión corregida maneja correctamente las rutas con caracteres especiales.
-        """
-        if PDF_SUPPORT:
-            file_types = "Imágenes y PDFs (*.png *.jpg *.jpeg *.bmp *.tiff *.pdf);;Todas (*.*)"
-        else:
-            file_types = "Imágenes (*.png *.jpg *.jpeg *.bmp *.tiff);;Todas (*.*)"
-
-        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Seleccionar Archivo", "", file_types
-        )
-
+        """Abre imágenes, PSD, PDF, AI, SVG o EPS."""
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Abrir imagen o documento", "", doc_input.OPEN_FILTER)
         if not file_path:
-            return # El usuario canceló
-
+            return
+        page, dpi = 0, self.job_settings().dpi
+        ext = os.path.splitext(file_path)[1].lower()
         try:
-            self.status_bar.showMessage(f"📂 Cargando: {os.path.basename(file_path)}...")
-            
-            self.image = None
-            self.image_info = {}
-
-            if file_path.lower().endswith('.pdf') and PDF_SUPPORT:
-                # --- Lógica para cargar PDFs ---
+            if ext in doc_input.VECTOR_EXTENSIONS and doc_input.page_count(file_path) > 1 and ext == '.pdf':
                 selector = PDFPageSelector(file_path, self)
-                if selector.exec_() == QtWidgets.QDialog.Accepted:
-                    page_num = selector.get_selected_page()
-                    resolution = selector.get_resolution()
-                    
-                    pdf_doc = fitz.open(file_path)
-                    page = pdf_doc.load_page(page_num)
-                    pix = page.get_pixmap(matrix=fitz.Matrix(resolution/72, resolution/72), alpha=False)
-                    
-                    img_array = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-                    self.image = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-                    
-                    self.image_info = {
-                        'file_path': file_path,
-                        'width_px': self.image.shape[1], 'height_px': self.image.shape[0],
-                        'dpi_x': resolution, 'dpi_y': resolution,
-                        'width_cm': (self.image.shape[1] / resolution) * 2.54,
-                        'height_cm': (self.image.shape[0] / resolution) * 2.54
-                    }
-                else:
-                    self.status_bar.clearMessage()
+                if selector.exec_() != QtWidgets.QDialog.Accepted:
                     return
-            else:
-                # --- Lógica para cargar Imágenes (CORREGIDA para caracteres especiales) ---
-                # Este método lee el archivo a un buffer de memoria primero,
-                # lo que evita problemas con caracteres en la ruta del archivo.
-                with open(file_path, "rb") as stream:
-                    bytes_array = bytearray(stream.read())
-                    numpy_array = np.asarray(bytes_array, dtype=np.uint8)
-                    img = cv2.imdecode(numpy_array, cv2.IMREAD_UNCHANGED)
-
-                if img is None:
-                    raise ValueError("OpenCV no pudo decodificar el archivo. Puede que esté corrupto o en un formato no soportado.")
-                
-                self._set_loaded_image(img)
-
-                # Poblar image_info completamente
-                dpi_x, dpi_y = 72, 72
-                try:
-                    with Image.open(file_path) as pil_img:
-                        dpi_x, dpi_y = pil_img.info.get('dpi', (72, 72))
-                except Exception:
-                    pass # Usar DPI por defecto si no se puede leer
-
-                self.image_info = {
-                    'file_path': file_path,
-                    'width_px': self.image.shape[1], 'height_px': self.image.shape[0],
-                    'dpi_x': dpi_x, 'dpi_y': dpi_y,
-                    'width_cm': (self.image.shape[1] / dpi_x) * 2.54,
-                    'height_cm': (self.image.shape[0] / dpi_y) * 2.54
-                }
-
-            # --- Actualizaciones de la UI ---
-            self.display_original()
-            self.analyze_image_complexity()
-            self.update_print_format_compatibility() 
-            self.status_bar.showMessage(f"✅ Archivo cargado: {os.path.basename(file_path)}", 5000)
-
-        except Exception as e:
-            error_msg = f"Error al cargar el archivo: {e}"
-            print(f"❌ {error_msg}")
-            QtWidgets.QMessageBox.critical(self, "Error de Carga", error_msg)
-            self.status_bar.showMessage("❌ Falló la carga del archivo.")
-
-
-    def load_pdf(self, pdf_path):
-        """Cargar y procesar PDF"""
-        try:
-            print(f"📄 Cargando PDF: {pdf_path}")
-
-            # Mostrar selector de página
-            selector = PDFPageSelector(pdf_path, self)
-            if selector.exec_() == QtWidgets.QDialog.Accepted:
-                page_num = selector.get_selected_page()
-                resolution = selector.get_resolution()
-                color_mode = selector.get_color_mode()
-
-                print(f"📖 Procesando página {page_num + 1} a {resolution} DPI")
-
-                # Convertir página específica
-                if 'fitz' in sys.modules:
-                    import fitz
-                    pdf_doc = fitz.open(pdf_path)
-                    page = pdf_doc[page_num]
-
-                    zoom = resolution / 72.0
-                    matrix = fitz.Matrix(zoom, zoom)
-                    pix = page.get_pixmap(matrix=matrix, alpha=False)
-
-                    img_data = pix.tobytes("ppm")
-                    pil_img = Image.open(io.BytesIO(img_data))
-
-                    pdf_doc.close()
-                else:
-                    from pdf2image import convert_from_path
-                    pages = convert_from_path(
-                        pdf_path,
-                        dpi=resolution,
-                        first_page=page_num + 1,
-                        last_page=page_num + 1
-                    )
-                    pil_img = pages[0]
-
-                # Convertir a formato OpenCV
-                img_array = np.array(pil_img)
-                if len(img_array.shape) == 3:
-                    self.image = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
-                else:
-                    self.image = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
-                self.image_alpha = None
-
-                # Actualizar información adicional para PDF
-                self.image_info = {
-                    'width_px': img_array.shape[1],
-                    'height_px': img_array.shape[0],
-                    'dpi_x': resolution,
-                    'dpi_y': resolution,
-                    'width_cm': (img_array.shape[1] / resolution) * 2.54,
-                    'height_cm': (img_array.shape[0] / resolution) * 2.54,
-                    'file_size_mb': os.path.getsize(pdf_path) / (1024 * 1024),
-                    'file_path': pdf_path,
-                    'source_type': 'PDF',
-                    'pdf_page': page_num + 1,
-                    'pdf_resolution': resolution
-                }
-
-                # Actualizar análisis de complejidad
-                self.analyze_image_complexity()
-
-                self.display_original()
-                # IMPORTANTE: Actualizar compatibilidad después de cargar PDF
-                self.update_print_format_compatibility()
-
-                # Actualizar etiqueta de información
-                res_text = f"PDF, página {page_num + 1}, {img_array.shape[1]}×{img_array.shape[0]}px, {resolution} DPI, {self.image_info['width_cm']:.1f}×{self.image_info['height_cm']:.1f}cm"
-                self.image_res_label.setText(res_text)
-
-                self.status_bar.showMessage(f"✅ PDF cargado: página {page_num + 1}")
-                print("✅ PDF procesado correctamente")
-
-        except Exception as e:
-            error_msg = f"Error al cargar PDF: {str(e)}"
-            print(f"❌ {error_msg}")
-            QtWidgets.QMessageBox.critical(self, "Error", error_msg)
+                page, dpi = selector.get_selected_page(), selector.get_resolution()
+        except Exception:
+            pass
+        self.load_image_file(file_path, page=page, dpi=dpi)
 
     def _set_loaded_image(self, img):
         """
@@ -1562,36 +1412,41 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.image_alpha = None
         self.image = prepare_image_for_processing(img)
 
-    def load_image_file(self, file_path):
-        """Cargar archivo de imagen"""
+    def load_image_file(self, file_path, page=0, dpi=None):
+        """
+        Carga cualquier formato admitido (ver core/input.py). Los vectoriales se
+        rasterizan al DPI de salida, así la trama se genera con todo el detalle.
+        """
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
-            print(f"📂 Cargando: {file_path}")
-
-            # Cargar imagen con OpenCV
-            img = cv2.imread(file_path, cv2.IMREAD_UNCHANGED)
-            if img is None:
-                raise ValueError("No se pudo cargar la imagen")
-
-            self._set_loaded_image(img)
-
-            # Detectar resolución de la imagen
-            self.detect_image_resolution(file_path)
-            
-            # Analizar complejidad
-            self.analyze_image_complexity()
-
-            self.display_original()
-            self.update_print_format_compatibility()
-
-            self.status_bar.showMessage(f"✅ Imagen cargada: {os.path.basename(file_path)}")
-            print("✅ Imagen cargada correctamente")
-
+            document = doc_input.load_document(file_path, dpi or self.job_settings().dpi, page)
         except Exception as e:
-            error_msg = f"Error al cargar imagen: {str(e)}"
-            print(f"❌ {error_msg}")
-            QtWidgets.QMessageBox.critical(self, "Error", error_msg)
+            QtWidgets.QApplication.restoreOverrideCursor()
+            QtWidgets.QMessageBox.critical(self, "No se pudo abrir el archivo",
+                                           f"{os.path.basename(file_path)}\n\n{e}")
+            return
+        QtWidgets.QApplication.restoreOverrideCursor()
 
+        self._set_loaded_image(document.bgra)
+        self.image_info = document.info()
+        self.image_info['file_size_mb'] = os.path.getsize(file_path) / (1024 * 1024)
+        self.channel_arrays, self.preview_cache = {}, {}
+        self.display_original()
+        self.analyze_image_complexity()
+        self.update_print_format_compatibility()
+        self.update_resolution_advice()
+        notes = "; ".join(document.notes)
+        self.status_bar.showMessage(f"Abierto: {os.path.basename(file_path)}" + (f". {notes}" if notes else ""), 10000)
 
+    def update_resolution_advice(self):
+        """Resolución efectiva al tamaño final frente a la lineatura elegida."""
+        if self.image is None or not self.image_info:
+            return
+        level, message = doc_input.resolution_advice(self.image.shape, self.image_info.get('dpi_x', 72),
+                                                     self.job_settings())
+        color = {'ok': theme.ESTADO_OK, 'aviso': theme.ESTADO_ALERTA, 'riesgo': theme.ESTADO_RIESGO}[level]
+        self.complexity_label.setText(message)
+        self.complexity_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
 
     def calculate_optimal_lpi(self, mesh_count, factor=2.5, equipment_factor=1.0, viewing_distance=1.0):
             """Algoritmo inteligente de cálculo de LPI"""
@@ -1878,61 +1733,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.moire_warning.update_moire_status(lpi, mesh, analysis, level, message,
                                                f"Recomendado: {low:.0f}–{high:.0f} LPI")
 
-
-    def detect_image_resolution(self, file_path):
-        """Detectar resolución y características de la imagen"""
-        try:
-            # Información básica con OpenCV
-            h, w = self.image.shape[:2]
-            file_size = os.path.getsize(file_path) / (1024 * 1024)  # MB
-
-            # Intentar obtener DPI con PIL
-            dpi_x, dpi_y = 72, 72  # Valores por defecto
-            try:
-                with Image.open(file_path) as pil_img:
-                    if hasattr(pil_img, 'info') and 'dpi' in pil_img.info:
-                        dpi_x, dpi_y = pil_img.info['dpi']
-                    elif hasattr(pil_img, 'info') and 'resolution' in pil_img.info:
-                        dpi_x, dpi_y = pil_img.info['resolution']
-            except:
-                pass
-
-            # Calcular tamaño de impresión en cm
-            if dpi_x > 0 and dpi_y > 0:
-                width_cm = (w / dpi_x) * 2.54
-                height_cm = (h / dpi_y) * 2.54
-            else:
-                # Asumir 300 DPI si no se puede detectar
-                width_cm = (w / 300) * 2.54
-                height_cm = (h / 300) * 2.54
-                dpi_x = dpi_y = 300
-
-            # Actualizar información en la interfaz
-            res_text = f"{w}×{h}px, {dpi_x:.0f} DPI, {width_cm:.1f}×{height_cm:.1f}cm, {file_size:.1f}MB"
-            self.image_res_label.setText(res_text)
-
-            # Guardar información para uso posterior
-            self.image_info = {
-                'width_px': w,
-                'height_px': h,
-                'dpi_x': dpi_x,
-                'dpi_y': dpi_y,
-                'width_cm': width_cm,
-                'height_cm': height_cm,
-                'file_size_mb': file_size,
-                'file_path': file_path
-            }
-
-            print(f"📊 Información de imagen detectada:")
-            print(f"   Dimensiones: {w}×{h} px")
-            print(f"   DPI: {dpi_x}×{dpi_y}")
-            print(f"   Tamaño físico: {width_cm:.1f}×{height_cm:.1f} cm")
-            print(f"   Archivo: {file_size:.1f} MB")
-
-        except Exception as e:
-            print(f"⚠️ Error detectando resolución: {e}")
-            self.image_res_label.setText("Resolución no detectada")
-            self.image_info = None
 
     def on_resolution_changed(self):
         """Responder a cambio de configuración de resolución"""

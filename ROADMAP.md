@@ -120,11 +120,15 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
 - **Resumen de calidad** en la barra de estado al separar: tinta total máxima, área sobre el límite, % con puntos que se pierden o se cierran.
 - Pruebas: 41.
 
-### Fase 6: Formatos de entrada
-- PSD (`psd-tools`), AI y PDF (PyMuPDF), EPS (Ghostscript).
-- Imágenes **CMYK** de entrada con su perfil ICC (`PIL.ImageCms`; ya hay perfiles GRACoL y AdobeRGB en `src/ui/profiles/`).
-- Vectoriales rasterizados directamente al DPI de salida.
-- Verificación de resolución: DPI efectivo al tamaño final y recomendación mínima para el LPI elegido.
+### Fase 6: Formatos de entrada *(hecha)*
+- Cargador único (`src/core/input.py`) para PNG, JPEG, TIFF, BMP, WebP, **PSD/PSB**, **PDF**, **AI** (compatible con PDF), **SVG** y **EPS** (con Ghostscript).
+- **Gestión de color**: se respeta el perfil ICC incrustado. Las imágenes **CMYK** se convierten a sRGB con su perfil, o con GRACoL 2006 si no traen uno (antes OpenCV las convertía sin perfil). AdobeRGB y otros perfiles RGB pasan a sRGB.
+- **Vectoriales** rasterizados directamente al DPI de salida, con fondo transparente: fuera del arte no va tinta ni base.
+- PDF de varias páginas: selector de página.
+- **Aviso de resolución**: resolución efectiva al tamaño final frente al mínimo de 2 × LPI (verde, ámbar o rojo en el panel Imagen). Se recalcula al cambiar LPI, formato o ajuste.
+- Corregido: abrir un PDF después de un PNG con transparencia dejaba el alfa del PNG, de otro tamaño, y la separación fallaba.
+- Dependencias: `psd-tools`; Ghostscript opcional para EPS.
+- Pruebas: 47.
 
 ### Fase 7: Técnicas combinadas y automatización
 - **Color índice** (punto cuadrado/difusión) y **proceso simulado** para prenda oscura.

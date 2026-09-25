@@ -11,6 +11,6 @@ cd "$CLAUDE_PROJECT_DIR"
 
 # En el contenedor no hay pantalla: OpenCV sin GUI y Qt en modo offscreen.
 pip install --quiet --disable-pip-version-check \
-  numpy opencv-python-headless PyQt5 pillow PyMuPDF ruff
+  numpy opencv-python-headless PyQt5 pillow PyMuPDF psd-tools ruff
 
 echo 'export QT_QPA_PLATFORM=offscreen' >> "$CLAUDE_ENV_FILE"

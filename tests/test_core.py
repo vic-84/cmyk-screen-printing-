@@ -721,6 +721,18 @@ class CoreTests(unittest.TestCase):
         film = output.finish_positive(screens["C"], "C", settings)
         self.assertGreater((film[:80] == 0).sum(), 0)
 
+    def test_icc_films_carry_the_profile_values_after_screening(self):
+        # Separación con GRACoL -> trama -> la cobertura de cada película reproduce el valor del perfil
+        ramp = np.linspace(0, 255, 240, dtype=np.uint8)
+        image = np.dstack([np.tile(ramp, (240, 1)), np.tile(ramp[:, None], (1, 240)), np.full((240, 240), 90, np.uint8)])
+        settings = JobSettings(icc_profile=self.GRACOL, lpi=45, dpi=300)
+        channels, screens, _ = render(image, None, settings)
+        cell = 24
+        for name in "CMYK":
+            coverage = (screens[name] == 0).reshape(10, cell, 10, cell).mean(axis=(1, 3)) * 100
+            target = channels[name].astype(np.float32).reshape(10, cell, 10, cell).mean(axis=(1, 3)) / 2.55
+            self.assertLess(float(np.abs(coverage - target).mean()), 2.5, name)
+
     def test_icc_controls_in_the_window(self):
         window = SimpleHalftoneApp()
         index = window.icc_profile_combo.findData(self.GRACOL)

@@ -467,6 +467,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.db_troubleshooting = {}
         self.channel_color_buttons = {}
         self.image = None
+        self.image_alpha = None
         self.image_info = None
         self.preview_cache = {}
         self.channel_arrays = {}
@@ -1083,11 +1084,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 if img is None:
                     raise ValueError("OpenCV no pudo decodificar el archivo. Puede que esté corrupto o en un formato no soportado.")
                 
-                # Si la imagen tiene canal alfa (transparencia), se convierte a BGR
-                if len(img.shape) > 2 and img.shape[2] == 4:
-                    self.image = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-                else:
-                    self.image = img
+                self._set_loaded_image(img)
 
                 # Poblar image_info completamente
                 dpi_x, dpi_y = 72, 72
@@ -1162,6 +1159,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                     self.image = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
                 else:
                     self.image = cv2.cvtColor(img_array, cv2.COLOR_GRAY2BGR)
+                self.image_alpha = None
 
                 # Actualizar información adicional para PDF
                 self.image_info = {
@@ -1197,6 +1195,18 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             print(f"❌ {error_msg}")
             QtWidgets.QMessageBox.critical(self, "Error", error_msg)
 
+    def _set_loaded_image(self, img):
+        """
+        Guarda la imagen como BGR opaco sobre blanco y conserva la transparencia
+        aparte. Convertir BGRA→BGR sin componer dejaba los píxeles transparentes
+        en negro, que se separaban como tinta al 100 % en todas las placas.
+        """
+        if img.ndim == 3 and img.shape[2] == 4:
+            self.image_alpha = img[:, :, 3].copy()
+        else:
+            self.image_alpha = None
+        self.image = prepare_image_for_processing(img)
+
     def load_image_file(self, file_path):
         """Cargar archivo de imagen"""
         try:
@@ -1207,7 +1217,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             if img is None:
                 raise ValueError("No se pudo cargar la imagen")
 
-            self.image = prepare_image_for_processing(img)
+            self._set_loaded_image(img)
 
             # Detectar resolución de la imagen
             self.detect_image_resolution(file_path)
@@ -3680,10 +3690,22 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             # La trama se genera a la resolución final del positivo. Si se tramara
             # a la resolución de la foto y luego se reescalara, el LPI real
             # dependería de la foto y los puntos se deformarían.
+            alpha = getattr(self, 'image_alpha', None)
+            if alpha is not None:
+                alpha = cv2.resize(alpha, (working_image.shape[1], working_image.shape[0]),
+                                   interpolation=cv2.INTER_LINEAR)
+
             if self.fit_format_cb.isChecked():
+                if alpha is None:
+                    # Imagen opaca: solo el margen agregado queda sin base
+                    alpha = np.full(working_image.shape[:2], 255, dtype=np.uint8)
                 print_format = self.get_current_print_format()
                 working_image = resize_to_print_format(
                     working_image, print_format, print_format["dpi_recommended"])
+                if alpha is not None:
+                    # El margen agregado al centrar es transparente: sin base
+                    alpha = resize_to_print_format(
+                        alpha, print_format, print_format["dpi_recommended"], background=0)
 
             rgb = cv2.cvtColor(working_image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
 
@@ -3713,7 +3735,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 self.channel_arrays['W'] = generate_white_base(
                     working_image,
                     WHITE_BASE_SETTINGS["opacity_threshold"],
-                    WHITE_BASE_SETTINGS["choke_pixels"])
+                    WHITE_BASE_SETTINGS["choke_pixels"],
+                    alpha)
 
             # --- Generación de Semitonos ---
             scale, shape, angles = self._get_halftone_params()

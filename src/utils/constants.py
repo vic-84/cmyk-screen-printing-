@@ -181,7 +181,7 @@ RESOLUTION_ENHANCEMENT = {
 WHITE_BASE_SETTINGS = {
     "enabled": True,
     "lpi": 45,  # Lineatura específica para base blanca
-    "opacity_threshold": 240,  # Umbral para detectar áreas que necesitan base
+    "opacity_threshold": 160,  # Valor (0-255) del canal más claro desde el que la base es 100 %
     "choke_pixels": 2,  # Contracción de la base para que no asome por los bordes
     "shape": "circle"  # Forma específica para base blanca
 }

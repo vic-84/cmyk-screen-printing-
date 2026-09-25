@@ -113,3 +113,28 @@ Criterio: la interfaz es gris neutro y el único color saturado en pantalla es l
 Pendiente de interfaz:
 - Los diálogos (asistente, calculadora de LPI, análisis de moiré) siguen con su estilo anterior, con estilos en línea y degradados.
 - Mostrar en la barra de estado el tamaño físico y el LPI real del positivo después de separar.
+
+---
+
+## 6. Prueba con `prueba.jpg` (prenda negra, malla 120)
+
+Configuración: A3, 300 dpi, ajustar al formato, base blanca, guías de registro, 30 LPI (con malla 120 la relación es 4.0; 45 LPI daría 2.7, demasiado abierta).
+
+| Medición | Resultado |
+|---|---|
+| LPI real en los 5 positivos (FFT) | 29.9 a 30.1 |
+| Página del PDF con guías | 327 × 450 mm |
+| DPI incrustado en los PNG | 300 |
+| Tinta total máxima (C+M+Y+K) | 183 % |
+| Cobertura de base blanca | 94 % (sólida) → **48 %** (proporcional) |
+| Tiempo de separación | ~14 s |
+
+Corregido a partir de esta prueba:
+- **Base blanca proporcional:** 100 % bajo los colores claros o saturados, 0 % bajo las sombras, donde se deja ver la tela negra. Antes era una máscara sólida que ponía blanco también bajo los negros; se gastaba tinta y el negro salía grisáceo.
+- **Transparencia al abrir PNG:** el botón "Abrir" convertía BGRA→BGR sin componer, así que los píxeles transparentes se separaban como negro al 100 % en todas las placas. Esas eran las franjas negras de las primeras capturas. Ahora se compone sobre blanco y el alfa se usa para no poner base fuera del diseño.
+
+Observaciones para prenda negra:
+- **Imagen de baja resolución:** mide 736 × 1104 px a 72 dpi; a tamaño A3 se amplía unas 4.8 veces. La trama sale correcta, pero el detalle fino se suaviza. Para producción conviene al menos 150 dpi al tamaño final.
+- **Placa negra:** la placa K lleva 44 % de tinta. Sobre prenda negra, la tinta negra que cae donde no hay base no aporta nada. Evalúa imprimir sin K, o solo con K sobre la base, para ahorrar una pantalla.
+- **Azules oscuros:** pierden saturación con `GCR_AMOUNT = 0.8`. Para prenda oscura prueba 0.5–0.6.
+- **Selección de malla:** la app no tiene un selector de malla. La malla sale de la etiqueta del LPI ("30 LPI (malla 110)"), así que el detector de moiré analiza malla 110 aunque imprimas en 120. Falta un selector de malla independiente.

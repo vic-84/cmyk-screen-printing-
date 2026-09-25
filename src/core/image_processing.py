@@ -10,7 +10,10 @@ def prepare_image_for_processing(img):
     if img is None:
         raise ValueError("La imagen no puede ser nula")
 
-    if img.ndim != 3 or img.shape[2] != 4:
+    if img.ndim == 2:
+        return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+
+    if img.shape[2] != 4:
         return img
 
     alpha = img[:, :, 3:4].astype(np.float32) / 255.0
@@ -62,36 +65,47 @@ def enhance_image_resolution(img, factor=2.0, method='INTER_CUBIC'):
         print(f"⚠️ Error mejorando resolución: {e}")
         return img.copy()
 
-def generate_white_base(img, threshold=240, choke=2):
-    """Generar máscara de base blanca para serigrafía en playeras oscuras"""
-    print("⚪ Generando base blanca automática...")
-    
+def generate_white_base(img, threshold=160, choke=2, alpha=None):
+    """
+    Base blanca proporcional para prenda oscura.
+
+    La cantidad de blanco sigue la luminosidad del color que va encima: 100 %
+    bajo los colores claros o saturados, nada bajo los negros (ahí se deja ver
+    la tela). Una máscara sólida ponía blanco también bajo las sombras y el
+    negro salía grisáceo.
+
+    threshold: valor (0-255) del canal más claro a partir del cual la base es
+    100 %. alpha: máscara de transparencia; sin alfa se asume imagen opaca.
+    """
+    print("⚪ Generando base blanca proporcional...")
+
     try:
-        # Convertir a escala de grises si es necesario
         if len(img.shape) == 3:
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            value = img.max(axis=2).astype(np.float32)
         else:
-            gray = img.copy()
-        
-        # Detectar áreas que necesitan base blanca (áreas claras)
-        # Invertir: áreas oscuras en la imagen original serán blancas en la base
-        white_base_mask = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY_INV)[1]
-        
+            value = img.astype(np.float32)
+
+        # Sombras (< 10 %) sin base; desde 'threshold' base completa
+        low = 0.10 * 255
+        high = max(float(threshold), low + 1)
+        base = np.clip((value - low) / (high - low), 0.0, 1.0)
+
+        if alpha is not None:
+            base *= alpha.astype(np.float32) / 255.0
+
+        white_base_mask = (base * 255).astype(np.uint8)
+
         # Choke: la base se contrae para que no asome por los bordes del color
         # cuando el registro de prensa no es perfecto
         if choke > 0:
             kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (choke*2+1, choke*2+1))
-            white_base_mask = cv2.morphologyEx(white_base_mask, cv2.MORPH_ERODE, kernel)
-        
-        # Suavizar bordes
-        white_base_mask = cv2.GaussianBlur(white_base_mask, (3, 3), 0)
-        
-        print("✅ Máscara de base blanca generada")
+            white_base_mask = cv2.erode(white_base_mask, kernel)
+
+        print("✅ Base blanca generada")
         return white_base_mask
-        
+
     except Exception as e:
         print(f"⚠️ Error generando base blanca: {e}")
-        # Retornar máscara vacía en caso de error
         return np.zeros(img.shape[:2], dtype=np.uint8)
 
 def detect_image_complexity(img):
@@ -161,7 +175,7 @@ def rotate_image(img, angle):
         print(f"⚠️ Error en rotación: {e}")
         return img.copy()
 
-def resize_to_print_format(img, print_format, target_dpi):
+def resize_to_print_format(img, print_format, target_dpi, background=255):
     """Redimensionar imagen para ajustar al formato de impresión"""
     try:
         # Obtener dimensiones del formato en píxeles
@@ -192,9 +206,9 @@ def resize_to_print_format(img, print_format, target_dpi):
         
         # Crear imagen del tamaño del formato con fondo blanco
         if len(img.shape) == 3:
-            final_img = np.ones((height_px, width_px, 3), dtype=np.uint8) * 255
+            final_img = np.full((height_px, width_px, 3), background, dtype=np.uint8)
         else:
-            final_img = np.ones((height_px, width_px), dtype=np.uint8) * 255
+            final_img = np.full((height_px, width_px), background, dtype=np.uint8)
         
         # Centrar imagen redimensionada
         start_x = (width_px - new_w) // 2

@@ -5,7 +5,7 @@ import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from src.core.image_processing import prepare_image_for_processing, rotate_image
+from src.core.image_processing import generate_white_base, prepare_image_for_processing, rotate_image
 from src.ui.main_window import SimpleHalftoneApp
 from src.utils.constants import LPI_VALUES, MEASUREMENT_UNITS, POINT_SHAPES, TOTAL_INK_LIMIT
 
@@ -89,6 +89,33 @@ class CoreTests(unittest.TestCase):
 
         # A5 = 148 x 210 mm a 300 dpi
         self.assertEqual(window.preview_cache["C"].shape, (2480, 1748))
+        window.close()
+
+    def test_white_base_follows_lightness_and_skips_black(self):
+        image = np.zeros((20, 30, 3), dtype=np.uint8)
+        image[:, 10:20] = (40, 40, 200)   # rojo: necesita base completa
+        image[:, 20:] = (128, 128, 128)   # gris medio: base parcial
+
+        base = generate_white_base(image, threshold=160, choke=0)
+
+        self.assertEqual(base[:, :10].max(), 0)
+        self.assertEqual(base[:, 10:20].min(), 255)
+        self.assertTrue(0 < base[0, 25] < 255)
+
+    def test_transparent_margin_gets_no_white_base(self):
+        window = SimpleHalftoneApp()
+        rgba = np.zeros((20, 20, 4), dtype=np.uint8)
+        rgba[5:15, 5:15] = (40, 40, 200, 255)
+        window._set_loaded_image(rgba)
+        window.white_base_cb.setChecked(True)
+
+        window.process_cmyk()
+
+        white = window.channel_arrays["W"]
+        self.assertEqual(white[0, 0], 0)
+        self.assertGreater(white[10, 10], 200)
+        # La transparencia no se separa como tinta negra
+        self.assertEqual(window.channel_arrays["K"][0, 0], 0)
         window.close()
 
     def test_rotate_image_preserves_color_images(self):

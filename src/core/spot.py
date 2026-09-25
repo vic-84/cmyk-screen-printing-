@@ -30,8 +30,92 @@ def default_needs_base(color_rgb, garment_rgb):
 
 
 def order_light_to_dark(spots):
-    """Orden de impresión habitual: de claro a oscuro."""
-    return sorted(spots, key=lambda spot: -float(rgb_to_lab([spot['rgb']])[0][0]))
+    """
+    Orden de impresión habitual: de claro a oscuro. Las tintas marcadas
+    'print_last' (p. ej. el blanco de luces del proceso simulado) van al final.
+    """
+    return sorted(spots, key=lambda spot: (bool(spot.get('print_last')),
+                                           -float(rgb_to_lab([spot['rgb']])[0][0])))
+
+
+BAYER_8 = np.array([
+    [0, 32, 8, 40, 2, 34, 10, 42], [48, 16, 56, 24, 50, 18, 58, 26],
+    [12, 44, 4, 36, 14, 46, 6, 38], [60, 28, 52, 20, 62, 30, 54, 22],
+    [3, 35, 11, 43, 1, 33, 9, 41], [51, 19, 59, 27, 49, 17, 57, 25],
+    [15, 47, 7, 39, 13, 45, 5, 37], [63, 31, 55, 23, 61, 29, 53, 21]], dtype=np.float32) / 64.0 - 0.5
+
+
+def separate_index(bgr, alpha, settings, scale=1.0):
+    """
+    Color índice: la imagen se reduce a la paleta de tintas con tramado
+    ordenado (Bayer 8×8) en una rejilla de píxeles cuadrados de
+    index_resolution por pulgada. Cada píxel lleva una sola tinta, sin
+    solapamientos: las películas son sólidas (sin semitono).
+    """
+    spots = settings.spot_colors
+    h, w = bgr.shape[:2]
+    if not spots:
+        return {}
+    cell = max(1.0, settings.dpi * scale / settings.index_resolution)
+    grid_w, grid_h = max(1, round(w / cell)), max(1, round(h / cell))
+    small = cv2.resize(bgr, (grid_w, grid_h), interpolation=cv2.INTER_AREA)
+    lab = cv2.cvtColor(cv2.cvtColor(small, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0, cv2.COLOR_RGB2LAB)
+
+    palette_lab = rgb_to_lab([spot['rgb'] for spot in spots] + [list(settings.garment_rgb)]).astype(np.float32)
+    # Tramado ordenado: se perturba el color con la matriz de Bayer antes de elegir la tinta
+    ys, xs = np.mgrid[0:grid_h, 0:grid_w]
+    noise = BAYER_8[ys % 8, xs % 8][..., None] * settings.index_spread
+    distances = np.linalg.norm((lab + noise)[None, ...] - palette_lab[:, None, None, :], axis=-1)
+    nearest = distances.argmin(axis=0).astype(np.uint8)
+    nearest = cv2.resize(nearest, (w, h), interpolation=cv2.INTER_NEAREST)
+
+    channels = {}
+    opacity = alpha >= 128 if alpha is not None else True
+    for i, spot in enumerate(spots):
+        channels[spot['id']] = np.where((nearest == i) & opacity, 255, 0).astype(np.uint8)
+    if settings.white_base:
+        with_base = [spots[i]['id'] for i in range(len(spots)) if spots[i].get('base', True)]
+        base = np.zeros((h, w), dtype=np.uint8)
+        for spot_id in with_base:
+            base = np.maximum(base, channels[spot_id])
+        choke = int(round(settings.white_base_choke_px * scale))
+        if choke > 0:
+            base = cv2.erode(base, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (choke * 2 + 1, choke * 2 + 1)))
+        channels['W'] = base
+    return channels
+
+
+def spot_masks_for_cmyk(bgr, alpha, settings):
+    """
+    Tintas planas añadidas a una cuatricromía: cada una cubre los píxeles a
+    menos de spot_tolerance (ΔE) de su color. Con semitono el borde se
+    difumina hasta 2 × la tolerancia. Devuelve {id: canal} y la máscara
+    total (0-1) para quitar esas zonas de C, M, Y, K (knockout).
+    """
+    spots = settings.spot_colors
+    h, w = bgr.shape[:2]
+    channels = {spot['id']: np.zeros((h, w), dtype=np.uint8) for spot in spots}
+    knockout = np.zeros((h, w), dtype=np.float32)
+    if not spots:
+        return channels, knockout
+    palette_lab = rgb_to_lab([spot['rgb'] for spot in spots]).astype(np.float32)
+    tolerance = max(1.0, settings.spot_tolerance)
+    for top in range(0, h, BAND_ROWS):
+        bottom = min(h, top + BAND_ROWS)
+        lab = cv2.cvtColor(cv2.cvtColor(bgr[top:bottom], cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0,
+                           cv2.COLOR_RGB2LAB)
+        distances = np.linalg.norm(lab[None, ...] - palette_lab[:, None, None, :], axis=-1)
+        nearest = distances.argmin(axis=0)
+        opacity = alpha[top:bottom].astype(np.float32) / 255.0 if alpha is not None else 1.0
+        for i, spot in enumerate(spots):
+            if spot.get('halftone'):
+                amount = np.clip((2 * tolerance - distances[i]) / tolerance, 0.0, 1.0)
+            else:
+                amount = (distances[i] < tolerance).astype(np.float32)
+            amount = amount * (nearest == i) * opacity
+            channels[spot['id']][top:bottom] = np.round(amount * 255).astype(np.uint8)
+            knockout[top:bottom] = np.maximum(knockout[top:bottom], amount)
+    return channels, knockout
 
 
 def separate_spot(bgr, alpha, settings, scale=1.0):

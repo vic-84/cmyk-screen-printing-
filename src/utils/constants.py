@@ -189,7 +189,10 @@ SEPARATION_MODES = {
     "Cuatricromía (CMYK)": "cmyk",
     "Semitono (1 tinta)": "mono",
     "Color plano (spot)": "spot",
+    "Color índice": "index",
+    "Cuatricromía + planos": "cmyk_spot",
 }
+SPOT_PALETTE_MODES = ("spot", "index", "cmyk_spot")
 CHANNEL_NAMES = ["C", "M", "Y", "K", "W"]  # Incluimos base blanca
 
 # Configuraciones de resolución

@@ -23,7 +23,7 @@ NEUTRAL_THRESHOLD = 128
 @dataclass
 class JobSettings:
     # Técnica
-    mode: str = 'cmyk'                   # cmyk | mono | spot
+    mode: str = 'cmyk'                   # cmyk | mono | spot | index | cmyk_spot
 
     # Malla y trama
     mesh_tpi: float = 200.0              # hilos por pulgada
@@ -71,6 +71,9 @@ class JobSettings:
     trap_mm: float = 0.0
     spot_softness: float = 12.0          # ΔE: cuánto se reparte una tinta con semitono
     spot_angle: float = 22.5
+    spot_tolerance: float = 10.0         # ΔE: alcance de una tinta plana en CMYK + planos
+    index_resolution: float = 150.0      # píxeles cuadrados por pulgada en color índice
+    index_spread: float = 18.0           # ΔE: intensidad del tramado ordenado del índice
 
     # Canales: umbral 128 = sin ajuste; menor = más tinta. Densidad en %.
     thresholds: dict = field(default_factory=lambda: {c: NEUTRAL_THRESHOLD for c in 'CMYKW'})
@@ -90,8 +93,10 @@ class JobSettings:
 
     def ink_channels(self):
         """Canales de tinta de la técnica actual (sin base blanca)."""
-        if self.mode == 'spot':
+        if self.mode in ('spot', 'index'):
             return [spot['id'] for spot in self.spot_colors]
+        if self.mode == 'cmyk_spot':
+            return list(PROCESS_CHANNELS) + [spot['id'] for spot in self.spot_colors]
         return list(MONO_CHANNELS if self.mode == 'mono' else PROCESS_CHANNELS)
 
     def channels(self):

@@ -11,7 +11,7 @@ import numpy as np
 
 from .image_processing import enhance_image_resolution, generate_white_base, resize_to_print_format
 from .screening import BAND_ROWS, screen_channel
-from .spot import separate_spot
+from .spot import separate_index, separate_spot, spot_masks_for_cmyk
 
 PREVIEW_MAX_SIDE = 1600
 PREVIEW_MIN_CELL_PX = 4.0
@@ -82,6 +82,19 @@ def separate_channels(bgr, alpha, settings, scale=1.0):
     """Canales de tinta continuos (sin tramar) para la imagen preparada."""
     if settings.mode == 'spot':
         return separate_spot(bgr, alpha, settings, scale)
+    if settings.mode == 'index':
+        return separate_index(bgr, alpha, settings, scale)
+    if settings.mode == 'cmyk_spot':
+        spot_channels, knockout = spot_masks_for_cmyk(bgr, alpha, settings)
+        channels = separate_cmyk(bgr, settings.gcr, settings.ink_limit)
+        keep = 1.0 - knockout
+        for name in 'CMYK':
+            channels[name] = np.round(channels[name] * keep).astype(np.uint8)
+        channels.update(spot_channels)
+        if settings.white_base:
+            channels['W'] = generate_white_base(
+                bgr, settings.white_base_threshold, int(round(settings.white_base_choke_px * scale)), alpha)
+        return channels
     if settings.mode == 'mono':
         # Semitono de una tinta: la cantidad de tinta sigue la oscuridad de la imagen
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)

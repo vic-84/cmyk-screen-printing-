@@ -1,3 +1,5 @@
+import io
+import json
 import os
 import tempfile
 import unittest
@@ -564,6 +566,65 @@ class CoreTests(unittest.TestCase):
         window.process_cmyk()
         self.assertIn("C", window.preview_cache)
         window.close()
+
+    def test_index_color_uses_one_ink_per_pixel(self):
+        gradient = np.zeros((60, 256, 3), dtype=np.uint8)
+        gradient[:, :, 2] = np.arange(256, dtype=np.uint8)
+        settings = JobSettings(mode="index", garment_rgb=[0, 0, 0], index_resolution=100,
+                               spot_colors=[{"id": "S1", "name": "Rojo", "rgb": [255, 0, 0]},
+                                            {"id": "S2", "name": "Granate", "rgb": [128, 0, 0]}])
+        _, screens, _ = render(gradient, None, settings)
+        ink1, ink2 = screens["S1"] == 0, screens["S2"] == 0
+        self.assertFalse((ink1 & ink2).any())
+        self.assertLess(ink1[:, :64].mean(), ink1[:, 192:].mean())
+        self.assertTrue(set(np.unique(screens["S1"])) <= {0, 255})
+
+    def test_cmyk_plus_spot_knocks_out_process_inks(self):
+        image = np.full((50, 50, 3), 200, dtype=np.uint8)
+        image[10:30, 10:30] = (46, 16, 200)   # rojo 186 en BGR
+        settings = JobSettings(mode="cmyk_spot", spot_colors=[{"id": "S1", "name": "PMS 186 C", "rgb": [200, 16, 46]}])
+        channels, _, _ = render(image, None, settings)
+        self.assertEqual(settings.channels()[-1], "S1")
+        self.assertEqual(channels["S1"][20, 20], 255)
+        self.assertEqual(channels["M"][20, 20], 0)
+        self.assertEqual(channels["S1"][40, 40], 0)
+        self.assertGreater(channels["K"][40, 40] + channels["C"][40, 40], 0)
+
+    def test_simulated_process_adds_highlight_white_last(self):
+        window = SimpleHalftoneApp()
+        window._set_loaded_image(self._spot_test_image())
+        window.garment_color = QtGui.QColor(0, 0, 0)
+        window.mode_combo.setCurrentText("Color plano (spot)")
+        window.spot_count_spin.setValue(2)
+        window.prepare_simulated_process()
+        settings = window.job_settings()
+        self.assertEqual(settings.channel_name(settings.channels()[-1]), "Blanco de luces")
+        self.assertEqual(settings.channels()[0], "W")
+        self.assertTrue(all(sp["halftone"] for sp in settings.spot_colors))
+        window.close()
+
+    def test_batch_cli_processes_a_folder(self):
+        from src import cli
+        with tempfile.TemporaryDirectory() as folder:
+            images = os.path.join(folder, "imagenes")
+            os.makedirs(images)
+            Image.new("RGB", (60, 40), (200, 40, 40)).save(os.path.join(images, "a.png"))
+            Image.new("RGB", (40, 60), (40, 40, 200)).save(os.path.join(images, "b.jpg"))
+            with open(os.path.join(images, "notas.txt"), "w") as f:
+                f.write("no es imagen")
+            config = os.path.join(folder, "trabajo.json")
+            JobSettings(lpi=30, output_format="tiff", registration_guides=True, fit_to_paper=True,
+                        paper_width_mm=60, paper_height_mm=60).save(config)
+            out = os.path.join(folder, "salida")
+            with mock.patch("sys.stdout", new=io.StringIO()):
+                code = cli.main([config, images, "-o", out])
+            produced = sorted(os.listdir(os.path.join(out, "a")))
+            with open(os.path.join(out, "lote.json"), encoding="utf-8") as f:
+                batch = json.load(f)
+        self.assertEqual(code, 0)
+        self.assertEqual(len(batch), 2)
+        self.assertIn("POSITIVO_K.tif", produced)
+        self.assertIn("configuracion.json", produced)
 
     def test_rotate_image_preserves_color_images(self):
         image = np.zeros((20, 30, 3), dtype=np.uint8)

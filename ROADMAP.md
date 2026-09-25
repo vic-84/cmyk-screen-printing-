@@ -130,10 +130,16 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
 - Dependencias: `psd-tools`; Ghostscript opcional para EPS.
 - Pruebas: 47.
 
-### Fase 7: Técnicas combinadas y automatización
-- **Color índice** (punto cuadrado/difusión) y **proceso simulado** para prenda oscura.
-- CMYK + colores planos en un mismo trabajo.
-- **Lotes** desde la línea de comandos: `python -m src.cli trabajo.json imagenes/`.
+### Fase 7: Técnicas combinadas y automatización *(hecha)*
+- **Color índice**: la imagen se reduce a la paleta de tintas con tramado ordenado (Bayer 8×8) en una rejilla de píxeles cuadrados (100–200 ppp configurable). Cada píxel lleva una sola tinta: películas sólidas sin solapes.
+- **Proceso simulado** (botón en color plano): tintas cubrientes con semitono, base blanca primero y **blanco de luces** al final.
+- **Cuatricromía + planos**: CMYK más tintas planas (por ejemplo un Pantone de logo). Cada plana cubre los píxeles cercanos a su color (alcance en ΔE) y se **quita de C, M, Y, K** en esa zona (knockout); se imprime después de la cuatricromía.
+- **Lotes desde la línea de comandos**:
+  ```
+  python -m src.cli trabajo.json imagenes/ otra.psd -o salida/
+  ```
+  Usa la configuración guardada por la app. Por cada archivo genera una carpeta con positivos, PDF, configuración y `resumen.json` (tamaño, tinta total, puntos que se pierden, tiempo). Si la técnica es plano o índice sin paleta, detecta los colores de cada imagen (`--colores N`). Un archivo con error no detiene el lote.
+- Pruebas: 51.
 
 ### Fase 8: Versión web
 - Reutiliza el motor de la fase 1 detrás de una API. Interfaz web aparte.

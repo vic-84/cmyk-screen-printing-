@@ -108,6 +108,9 @@ def screen_channel(channel, name, settings, scale=1.0):
     por imagen (la celda se reduce en la misma proporción).
     """
     from .tone import apply_tone  # tone importa adjust_levels de este módulo
+    if settings.mode == 'index' and name != 'W':
+        # Color índice: películas sólidas de píxeles cuadrados, sin trama
+        return np.where(channel >= 128, 0, 255).astype(np.uint8)
     toned = apply_tone(channel, name, settings)
     cell = max(2.0, settings.cell_px * scale)
     return halftone(toned, cell, settings.dot_shape, settings.channel_angle(name))

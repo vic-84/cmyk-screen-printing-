@@ -744,7 +744,28 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.spot_angle_spin.setValue(22.5)
         self.spot_angle_spin.setSuffix(" °")
         spot_grid.addWidget(self.spot_angle_spin, 2, 1)
+
+        spot_grid.addWidget(field_label("Resolución índice"), 3, 0)
+        self.index_resolution_spin = QtWidgets.QDoubleSpinBox()
+        self.index_resolution_spin.setRange(50, 400)
+        self.index_resolution_spin.setDecimals(0)
+        self.index_resolution_spin.setValue(150)
+        self.index_resolution_spin.setSuffix(" ppp")
+        self.index_resolution_spin.setToolTip("Píxeles cuadrados por pulgada del color índice (suele ir de 100 a 200)")
+        spot_grid.addWidget(self.index_resolution_spin, 3, 1)
+        spot_grid.addWidget(field_label("Alcance del plano"), 4, 0)
+        self.spot_tolerance_spin = QtWidgets.QDoubleSpinBox()
+        self.spot_tolerance_spin.setRange(2, 40)
+        self.spot_tolerance_spin.setValue(10)
+        self.spot_tolerance_spin.setSuffix(" ΔE")
+        self.spot_tolerance_spin.setToolTip("En cuatricromía + planos: qué tan parecido debe ser un píxel a la tinta plana")
+        spot_grid.addWidget(self.spot_tolerance_spin, 4, 1)
         spot_layout.addLayout(spot_grid)
+        self.simulated_btn = QtWidgets.QPushButton("Preparar proceso simulado")
+        self.simulated_btn.setToolTip("Para prenda oscura: todas las tintas con semitono y cubrientes, "
+                                      "base blanca y blanco de luces al final")
+        self.simulated_btn.clicked.connect(self.prepare_simulated_process)
+        spot_layout.addWidget(self.simulated_btn)
         self.spot_library_label = secondary_label("Sin biblioteca de color cargada.")
         spot_layout.addWidget(self.spot_library_label)
         self.spot_group.setVisible(False)
@@ -1153,7 +1174,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.fit_format_cb.stateChanged.connect(lambda *_: self.update_resolution_advice())
         self.print_format_combo.currentIndexChanged.connect(lambda *_: self.update_resolution_advice())
         self.ink_limit_spin.valueChanged.connect(self.schedule_reseparation)
-        for control in (self.trap_spin, self.spot_softness_spin):
+        for control in (self.trap_spin, self.spot_softness_spin, self.spot_tolerance_spin, self.index_resolution_spin):
             control.valueChanged.connect(self.schedule_reseparation)
         self.spot_angle_spin.valueChanged.connect(self.schedule_rescreen)
         for control in (self.min_dot_spin, self.max_dot_spin, self.dot_gain_spin, *self.density_spins.values()):
@@ -1485,7 +1506,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
     def on_mode_changed(self, *_):
         mode = SEPARATION_MODES.get(self.mode_combo.currentText(), 'cmyk')
-        self.spot_group.setVisible(mode == 'spot')
+        self.spot_group.setVisible(mode in SPOT_PALETTE_MODES)
+        self.spot_group.setTitle({'index': "Color índice", 'cmyk_spot': "Tintas planas adicionales"}.get(mode, "Color plano"))
+        self.index_resolution_spin.setEnabled(mode == 'index')
+        self.spot_tolerance_spin.setEnabled(mode == 'cmyk_spot')
+        self.simulated_btn.setVisible(mode == 'spot')
+        self.set_spot_colors(self.spot_colors)
         self.update_channel_list_ui()
         if self.image is not None and self.preview_cache:
             self.process_cmyk()
@@ -1516,8 +1542,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         for spot in self.spot_colors:
             self.channel_colors[spot['id']] = QtGui.QColor(*spot['rgb'])
         spot_ids = [sp['id'] for sp in order_light_to_dark(self.spot_colors)]
-        others = [c for c in self.channel_order if not c.startswith('S')]
-        self.channel_order = ['W'] + spot_ids + [c for c in others if c != 'W']
+        others = [c for c in self.channel_order if not c.startswith('S') and c != 'W']
+        if SEPARATION_MODES.get(self.mode_combo.currentText()) == 'cmyk_spot':
+            # Las tintas planas se imprimen después de la cuatricromía
+            self.channel_order = ['W'] + others + spot_ids
+        else:
+            self.channel_order = ['W'] + spot_ids + others
         self.refresh_spot_table()
         self.update_channel_list_ui()
 
@@ -1583,6 +1613,24 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.process_cmyk()
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
+
+    def prepare_simulated_process(self):
+        """
+        Proceso simulado para prenda oscura: tintas cubrientes con semitono,
+        base blanca y un blanco de luces que se imprime al final.
+        """
+        if not self.spot_colors:
+            if self.image is None:
+                QtWidgets.QMessageBox.information(self, "Sin imagen", "Abre una imagen primero.")
+                return
+            self.spot_count_spin.setValue(max(self.spot_count_spin.value(), 6))
+            self.detect_spot_colors()
+        spots = [dict(sp, halftone=True, opaque=True) for sp in self.spot_colors if not sp.get('print_last')]
+        highlight = self._new_spot([255, 255, 255], "Blanco de luces")
+        highlight.update({'halftone': True, 'opaque': True, 'base': False, 'print_last': True})
+        self.white_base_cb.setChecked(True)
+        self.set_spot_colors(spots + [highlight])
+        self.process_cmyk()
 
     def selected_spot_rows(self):
         return sorted({index.row() for index in self.spot_table.selectedIndexes()})
@@ -2145,6 +2193,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             trap_mm=self.trap_spin.value(),
             spot_softness=self.spot_softness_spin.value(),
             spot_angle=self.spot_angle_spin.value(),
+            spot_tolerance=self.spot_tolerance_spin.value(),
+            index_resolution=self.index_resolution_spin.value(),
         )
 
     def apply_job_settings(self, settings):
@@ -2188,6 +2238,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.trap_spin.setValue(settings.trap_mm)
         self.spot_softness_spin.setValue(settings.spot_softness)
         self.spot_angle_spin.setValue(settings.spot_angle)
+        self.spot_tolerance_spin.setValue(settings.spot_tolerance)
+        self.index_resolution_spin.setValue(settings.index_resolution)
         self.set_spot_colors(settings.spot_colors)
         for ch, spin in self.density_spins.items():
             spin.setValue(settings.density.get(ch, 100.0))

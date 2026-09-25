@@ -32,8 +32,8 @@ class CoreTests(unittest.TestCase):
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
     def setUp(self):
-        global QtWidgets, QtGui
-        from PyQt5 import QtGui, QtWidgets
+        global QtWidgets, QtGui, QtCore
+        from PyQt5 import QtCore, QtGui, QtWidgets
 
     def test_transparent_pixels_do_not_become_black_ink(self):
         image = np.array([[[0, 0, 0, 0], [30, 20, 10, 255]]], dtype=np.uint8)
@@ -812,6 +812,41 @@ class CoreTests(unittest.TestCase):
         self.assertIn("datos del canal", plan.missing)
         # No se dibuja nada sobre el diseño
         np.testing.assert_array_equal(films["K"], output.place_on_paper(screens["K"], settings))
+
+    def test_mouse_wheel_scrolls_the_panel_instead_of_changing_values(self):
+        window = SimpleHalftoneApp()
+        window.resize(1200, 800)
+        window.show()
+        spin = window.density_spins["W"]
+        combo = window.placement_combo
+        QtWidgets.QApplication.processEvents()
+        for widget in (spin, combo):
+            before = spin.value(), combo.currentIndex()
+            event = QtGui.QWheelEvent(QtCore.QPointF(5, 5), QtCore.QPointF(5, 5), QtCore.QPoint(0, 0),
+                                      QtCore.QPoint(0, -120), QtCore.Qt.NoButton, QtCore.Qt.NoModifier,
+                                      QtCore.Qt.NoScrollPhase, False)
+            QtWidgets.QApplication.sendEvent(widget, event)
+            self.assertEqual((spin.value(), combo.currentIndex()), before)
+        # Con foco (tras hacer clic) la rueda sí cambia el valor
+        spin.setFocus()
+        QtWidgets.QApplication.processEvents()
+        if spin.hasFocus():
+            event = QtGui.QWheelEvent(QtCore.QPointF(5, 5), QtCore.QPointF(5, 5), QtCore.QPoint(0, 0),
+                                      QtCore.QPoint(0, -120), QtCore.Qt.NoButton, QtCore.Qt.NoModifier,
+                                      QtCore.Qt.NoScrollPhase, False)
+            QtWidgets.QApplication.sendEvent(spin, event)
+            self.assertLess(spin.value(), 100)
+        window.close()
+
+    def test_zero_density_is_reported_after_separating(self):
+        window = SimpleHalftoneApp()
+        window._set_loaded_image(np.full((60, 40, 3), 200, dtype=np.uint8))
+        window.white_base_cb.setChecked(True)
+        window.density_spins["W"].setValue(0)
+        window.density_spins["Y"].setValue(0)
+        window.process_cmyk()
+        self.assertIn("densidad 0 %", window.status_bar.currentMessage())
+        window.close()
 
     def test_gray_base_is_named_and_simulated_with_its_color(self):
         red = [220, 30, 30]

@@ -61,8 +61,10 @@ class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
     """
     ROW_HEIGHT = 30
 
-    def __init__(self, color_for_channel, angle_for_channel=None, parent=None, name_for_channel=None):
+    def __init__(self, color_for_channel, angle_for_channel=None, parent=None, name_for_channel=None,
+                 density_for_channel=None):
         super().__init__(parent)
+        self._density_for_channel = density_for_channel or (lambda ch: 100.0)
         self._color_for_channel = color_for_channel
         self._name_for_channel = name_for_channel or (lambda ch: CHANNEL_NAMES.get(ch, ch))
         self._angle_for_channel = angle_for_channel or (lambda ch: CMYK_ANGLES.get(ch))
@@ -99,7 +101,38 @@ class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
         angle = self._angle_for_channel(channel)
         if angle is not None:
             painter.drawText(text_rect, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight, f"{angle:g}°")
+        # Densidad cambiada: se avisa en la lista (una tinta al 0 % no se imprime)
+        density = self._density_for_channel(channel)
+        if density != 100:
+            painter.setPen(QtGui.QColor(theme.ESTADO_RIESGO if density == 0 else theme.ESTADO_ALERTA))
+            painter.drawText(text_rect.adjusted(0, 0, -52, 0), QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight,
+                             f"densidad {density:g} %")
         painter.restore()
+
+
+class WheelGuard(QtCore.QObject):
+    """
+    La rueda del mouse solo cambia casillas, menús y deslizadores que tienen el
+    foco (al hacer clic). Sin foco, la rueda desplaza el panel: al bajar por los
+    controles no se cambian valores sin querer.
+    """
+
+    def eventFilter(self, widget, event):
+        if event.type() == QtCore.QEvent.Wheel and not widget.hasFocus():
+            parent = widget.parentWidget()
+            while parent is not None and not isinstance(parent, QtWidgets.QAbstractScrollArea):
+                parent = parent.parentWidget()
+            if parent is not None:
+                QtWidgets.QApplication.sendEvent(parent.verticalScrollBar(), event)
+            return True
+        return False
+
+    def protect(self, root):
+        for widget in root.findChildren((QtWidgets.QAbstractSpinBox, QtWidgets.QComboBox, QtWidgets.QAbstractSlider)):
+            if isinstance(widget, QtWidgets.QScrollBar):
+                continue
+            widget.setFocusPolicy(QtCore.Qt.StrongFocus)
+            widget.installEventFilter(self)
 
 
 class AspectRatioPixmapLabel(QtWidgets.QLabel):
@@ -475,6 +508,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         # --- 5. Inicialización de la Interfaz Gráfica (SIEMPRE AL FINAL) ---
         self.init_ui()
+        self.wheel_guard = WheelGuard(self)
+        self.wheel_guard.protect(self)
 
     def init_ui(self):
         """
@@ -1044,7 +1079,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 lambda ch: self.channel_colors.get(ch, QtGui.QColor("white")),
                 self.channel_angle_for_list,
                 self.channel_list,
-                self.channel_display_name))
+                self.channel_display_name,
+                lambda ch: self.density_spins[ch].value() if ch in self.density_spins else 100.0))
         self.channel_list.orderChanged.connect(self.set_channel_order)
         self.channel_list.itemSelectionChanged.connect(self.on_channel_selection_changed)
         self.channel_list.setFixedHeight(ChannelScreenDelegate.ROW_HEIGHT * 5 + 4)
@@ -1289,6 +1325,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                         self.despeckle_spin):
             control.valueChanged.connect(self.schedule_reseparation)
         self.spot_angle_spin.valueChanged.connect(self.schedule_rescreen)
+        for spin in self.density_spins.values():
+            spin.valueChanged.connect(lambda *_: self.channel_list.viewport().update())
         for control in (self.min_dot_spin, self.max_dot_spin, self.dot_gain_spin, *self.density_spins.values()):
             control.valueChanged.connect(self.schedule_rescreen)
         for control in (self.shape_combo, self.angle_preset_combo, self.lpi_combo):
@@ -2417,6 +2455,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         """Resumen de control de calidad en la barra de estado tras separar."""
         report = sim.quality_report(self.channel_arrays, settings, self.preview_scale)
         parts = [f"{settings.lpi:g} LPI a {settings.dpi} DPI"]
+        off = [settings.channel_name(ch) for ch in settings.channels() if settings.density.get(ch, 100) == 0]
+        if off:
+            parts.insert(0, f"{' y '.join(off)} con densidad 0 %: no se imprimen (Canales → Densidad y ángulo)")
         if settings.mode == 'cmyk':
             parts.append(f"tinta total máx. {report['tac_max']:.0f} %"
                          + (f" ({report['tac_over']:.1%} del área sobre el límite)" if report['tac_over'] > 0.001 else ""))

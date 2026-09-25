@@ -1,5 +1,5 @@
 """
-Salida de positivos: colocación en el papel, guías de registro y archivos
+Salida de positivos: colocación en el lienzo, guías de registro y archivos
 con la resolución incrustada.
 """
 
@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image
 
 from .screening import halftone
+from .separation import canvas_offset
 
 CONTROL_STRIP_TONES = (5, 10, 25, 50, 75, 90, 95)
 SHAPE_NAMES = {'circle': 'redondo', 'ellipse': 'eliptico', 'square': 'cuadrado',
@@ -32,50 +33,94 @@ def put_text(canvas, text, origin, height_px, thickness=1):
 
 def place_on_paper(screen, settings):
     """
-    Centra la trama en el papel sin reescalarla. La imagen ya llega al tamaño
-    de salida (separation.prepare_image); reescalar una trama cambia el LPI y
-    deforma los puntos.
+    Coloca la trama en el lienzo (la película, del tamaño del papel) sin
+    reescalarla: la imagen ya llega al tamaño que ocupa (separation.layout).
+    Reescalar una trama cambia el LPI y deforma los puntos.
     """
-    paper_w, paper_h = settings.paper_px
+    canvas_w, canvas_h = settings.paper_px
+    margin = settings.guide_margin_px
+    area_w, area_h = max(1, canvas_w - 2 * margin), max(1, canvas_h - 2 * margin)
     h, w = screen.shape
-    if w > paper_w or h > paper_h:
-        # No debería ocurrir: prepare_image ajusta al papel cuando hay guías
-        top, left = max(0, (h - paper_h) // 2), max(0, (w - paper_w) // 2)
-        screen = screen[top:top + paper_h, left:left + paper_w]
+    if w > area_w or h > area_h:
+        # No debería ocurrir: layout nunca deja el diseño más grande que el área útil
+        top, left = max(0, (h - area_h) // 2), max(0, (w - area_w) // 2)
+        screen = screen[top:top + area_h, left:left + area_w]
         h, w = screen.shape
-    paper = np.full((paper_h, paper_w), 255, dtype=np.uint8)
-    y, x = (paper_h - h) // 2, (paper_w - w) // 2
-    paper[y:y + h, x:x + w] = screen
-    return paper
+    canvas = np.full((canvas_h, canvas_w), 255, dtype=np.uint8)
+    x, y = canvas_offset(w, h, settings)
+    canvas[y:y + h, x:x + w] = screen
+    return canvas
+
+
+def canvas_preview(rgb, settings, scale, background_rgb, max_side=1600):
+    """
+    Vista previa del diseño (RGB, a la escala de la vista) dentro del lienzo:
+    fondo del color de la prenda, borde del lienzo y, con guías, el área útil
+    punteada y las cruces. Así se ve dónde cae el diseño antes de exportar.
+    """
+    canvas_w, canvas_h = settings.paper_px
+    view = min(scale, max_side / max(canvas_w, canvas_h))
+    size = (max(1, round(canvas_w * view)), max(1, round(canvas_h * view)))
+    background = np.asarray(background_rgb, dtype=np.uint8)
+    canvas = np.empty((size[1], size[0], 3), dtype=np.uint8)
+    canvas[:] = background
+    h, w = rgb.shape[:2]
+    if view != scale:
+        factor = view / scale
+        rgb = cv2.resize(rgb, (max(1, round(w * factor)), max(1, round(h * factor))), interpolation=cv2.INTER_AREA)
+        h, w = rgb.shape[:2]
+    full_w, full_h = round(w / view), round(h / view)
+    x, y = canvas_offset(full_w, full_h, settings)
+    x, y = min(round(x * view), size[0] - w), min(round(y * view), size[1] - h)
+    canvas[max(0, y):max(0, y) + h, max(0, x):max(0, x) + w] = rgb[:size[1] - max(0, y), :size[0] - max(0, x)]
+    # Línea que contrasta con la prenda
+    line = (40, 40, 40) if int(background.astype(int).mean()) > 128 else (215, 215, 215)
+    cv2.rectangle(canvas, (0, 0), (size[0] - 1, size[1] - 1), line, 1)
+    margin = round(settings.guide_margin_px * view)
+    if margin > 0:
+        right, bottom = size[0] - 1 - margin, size[1] - 1 - margin
+        for start, end in [((margin, margin), (right, margin)), ((right, margin), (right, bottom)),
+                           ((right, bottom), (margin, bottom)), ((margin, bottom), (margin, margin))]:
+            length = max(abs(end[0] - start[0]), abs(end[1] - start[1]))
+            for t in range(0, length, 8):
+                a = t / max(length, 1)
+                b = min(t + 4, length) / max(length, 1)
+                p1 = (round(start[0] + (end[0] - start[0]) * a), round(start[1] + (end[1] - start[1]) * a))
+                p2 = (round(start[0] + (end[0] - start[0]) * b), round(start[1] + (end[1] - start[1]) * b))
+                cv2.line(canvas, p1, p2, line, 1)
+        cross = max(4, round(settings.guide_cross_mm / 25.4 * settings.dpi * view) // 2)
+        for cx, cy in [(margin, margin), (right, margin), (margin, bottom), (right, bottom)]:
+            cv2.line(canvas, (cx - cross, cy), (cx + cross, cy), line, 1)
+            cv2.line(canvas, (cx, cy - cross), (cx, cy + cross), line, 1)
+    return canvas
 
 
 def add_registration_guides(screen, channel, settings):
     """
-    Positivo con margen, cruces de registro en las esquinas del papel, marcas
-    de centro e identificación del canal (nombre, orden, LPI, ángulo, DPI).
+    Positivo con las guías DENTRO del lienzo: cruces de registro en las
+    esquinas del área útil, marcas de centro, identificación del canal
+    (nombre, orden, LPI, ángulo, DPI) en el margen superior y la tira de
+    control en el inferior. La película mide exactamente el lienzo.
     """
     dpi = settings.dpi
-    margin = int(settings.guide_margin_mm / 25.4 * dpi)
+    margin = settings.guide_margin_px
     cross = int(settings.guide_cross_mm / 25.4 * dpi)
     thickness = max(1, round(dpi / 150))
-    paper_w, paper_h = settings.paper_px
+    canvas = place_on_paper(screen, settings)
+    canvas_h, canvas_w = canvas.shape
+    right, bottom = canvas_w - margin, canvas_h - margin
 
-    canvas = np.full((paper_h + 2 * margin, paper_w + 2 * margin), 255, dtype=np.uint8)
-    canvas[margin:margin + paper_h, margin:margin + paper_w] = place_on_paper(screen, settings)
-
-    corners = [(margin, margin), (margin + paper_w, margin),
-               (margin, margin + paper_h), (margin + paper_w, margin + paper_h)]
-    for cx, cy in corners:
+    for cx, cy in [(margin, margin), (right, margin), (margin, bottom), (right, bottom)]:
         cv2.line(canvas, (cx - cross // 2, cy), (cx + cross // 2, cy), 0, thickness)
         cv2.line(canvas, (cx, cy - cross // 2), (cx, cy + cross // 2), 0, thickness)
         cv2.circle(canvas, (cx, cy), cross // 3, 0, thickness)
 
-    center_x, center_y = margin + paper_w // 2, margin + paper_h // 2
+    center_x, center_y = canvas_w // 2, canvas_h // 2
     tick = cross // 3
     cv2.line(canvas, (center_x - tick, margin - tick), (center_x + tick, margin - tick), 0, thickness)
-    cv2.line(canvas, (center_x - tick, margin + paper_h + tick), (center_x + tick, margin + paper_h + tick), 0, thickness)
+    cv2.line(canvas, (center_x - tick, bottom + tick), (center_x + tick, bottom + tick), 0, thickness)
     cv2.line(canvas, (margin - tick, center_y - tick), (margin - tick, center_y + tick), 0, thickness)
-    cv2.line(canvas, (margin + paper_w + tick, center_y - tick), (margin + paper_w + tick, center_y + tick), 0, thickness)
+    cv2.line(canvas, (right + tick, center_y - tick), (right + tick, center_y + tick), 0, thickness)
 
     order = settings.channels()
     position = order.index(channel) + 1 if channel in order else 0
@@ -88,11 +133,11 @@ def add_registration_guides(screen, channel, settings):
     put_text(canvas, label, (margin, max(text_height + 4, margin // 2)), text_height, max(1, thickness // 2))
 
     if settings.control_strip:
-        add_control_strip(canvas, channel, settings, margin, paper_h)
+        add_control_strip(canvas, channel, settings, margin, bottom)
     return canvas
 
 
-def add_control_strip(canvas, channel, settings, margin, paper_h):
+def add_control_strip(canvas, channel, settings, margin, area_bottom):
     """
     Tira 5-95 % en el margen inferior, tramada con la misma lineatura, ángulo
     y forma que el canal: sirve para revisar exposición y ganancia en la
@@ -101,7 +146,7 @@ def add_control_strip(canvas, channel, settings, margin, paper_h):
     dpi = settings.dpi
     patch = int(8 / 25.4 * dpi)
     height = max(8, int(min(margin * 0.45, 6 / 25.4 * dpi)))
-    top = margin + paper_h + (margin - height) // 2
+    top = area_bottom + (margin - height) // 2
     left = margin
     for i, tone_value in enumerate(CONTROL_STRIP_TONES):
         x = left + i * (patch + patch // 5)
@@ -120,10 +165,8 @@ def finish_positive(screen, channel, settings):
     """Positivo final de un canal según los ajustes de salida."""
     if settings.registration_guides:
         film = add_registration_guides(screen, channel, settings)
-    elif settings.fit_to_paper:
-        film = place_on_paper(screen, settings)
     else:
-        film = screen
+        film = place_on_paper(screen, settings)
     if settings.mirror:
         film = np.ascontiguousarray(film[:, ::-1])
     if settings.negative:

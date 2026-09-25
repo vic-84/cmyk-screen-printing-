@@ -213,3 +213,18 @@ Algunas marcas exigen separar con su perfil ICC. `src/core/icc.py`, sobre Little
 - **Sin ajustar**: el diseño sale a su tamaño físico, calculado con los DPI propios de la imagen. Un 736 × 1104 px a 72 dpi sale a 259.6 × 389.5 mm, también con la mejora de resolución. Antes salía a 62 × 93 mm.
 - Con guías de registro, si el diseño no cabe en el papel, se ajusta a él. Las guías agregan su margen fuera del papel.
 - Pruebas: `test_paper_sizes_are_rounded_not_truncated`, `test_fit_to_paper_fills_the_limiting_side_exactly`, `test_without_fit_the_image_prints_at_its_own_physical_size`, `test_custom_size_in_every_unit_reaches_the_film`, `test_export_matches_the_chosen_size`.
+
+## Lienzo primero
+
+- El **lienzo** es la medida de la película: A4, A3, Carta o Personalizado. La película siempre mide exactamente eso, con o sin guías.
+- Las **guías de registro** van dentro del lienzo, en su margen (15 mm):
+  - cruces en las esquinas del área útil
+  - marcas de centro
+  - datos del canal arriba
+  - tira de control abajo
+  
+  La película ya no crece 30 mm.
+- La **imagen se coloca** en el área útil de tres formas: *Ajustar al lienzo*, *Tamaño real* (según los DPI de la imagen) o *Ancho del diseño* (en mm). La posición puede ser *Centrada* o *Arriba al centro*, que es la habitual para pecho.
+- **Nunca se corta**: si el tamaño pedido no cabe, se reduce al área útil conservando la proporción y se avisa. Esto se muestra en el panel, en el estado, en la web (`reduced`) y en el CLI (`diseno_reducido_para_caber`).
+- La vista previa (escritorio y web) muestra el lienzo completo con el color de la prenda, el área útil punteada y las cruces.
+- Los trabajos JSON anteriores con `fit_to_paper` se cargan como `placement` `fit` o `real`.

@@ -19,7 +19,7 @@ from .core import input as doc_input
 from .core import output
 from .core.color import detect_palette
 from .core.job import JobSettings
-from .core.separation import design_size_mm, render
+from .core.separation import design_size_mm, layout, render
 from .core.simulate import quality_report
 from .core.spot import default_needs_base
 
@@ -75,7 +75,9 @@ def process_file(path, settings, out_dir, colors=6):
         'canales': [job.channel_name(c) for c in job.channels()],
         'positivos': files,
         'tamano_mm': [round(films[0].shape[1] / job.dpi * 25.4, 1), round(films[0].shape[0] / job.dpi * 25.4, 1)],
+        'lienzo_mm': [job.paper_width_mm, job.paper_height_mm],
         'diseno_mm': [round(v, 1) for v in design_size_mm(document.bgr.shape, job)],
+        'diseno_reducido_para_caber': layout(document.bgr.shape, job).reduced,
         'lpi': job.lpi, 'dpi': job.dpi,
         'tinta_total_max': round(report['tac_max'], 1),
         'puntos_que_se_pierden': round(report['lost'], 4),

@@ -19,7 +19,7 @@ from src.core import input as doc_input
 from src.core import icc
 from src.core.job import JobSettings
 from src.core.screening import adjust_levels, halftone
-from src.core.separation import design_size_mm, render
+from src.core.separation import design_size_mm, layout, render
 from src.ui.main_window import SimpleHalftoneApp
 from src.utils.constants import LPI_VALUES, MEASUREMENT_UNITS, POINT_SHAPES, TOTAL_INK_LIMIT
 
@@ -47,6 +47,7 @@ class CoreTests(unittest.TestCase):
         window = SimpleHalftoneApp()
         window.image = np.zeros((10, 10, 3), dtype=np.uint8)
         window.white_base_cb.setChecked(False)
+        window.placement_combo.setCurrentIndex(window.placement_combo.findData("real"))
         window.resolution_combo.setCurrentText("Mejorar 150% (recomendado)")
 
         window.process_cmyk()
@@ -95,17 +96,19 @@ class CoreTests(unittest.TestCase):
         window.close()
 
     def test_fit_to_paper_screens_at_print_size(self):
-        settings = JobSettings(fit_to_paper=True, paper_width_mm=148, paper_height_mm=210, dpi=300)
+        settings = JobSettings(placement="fit", paper_width_mm=148, paper_height_mm=210, dpi=300)
         image = np.full((50, 40, 3), 128, dtype=np.uint8)
 
         _, screens, scale = render(image, None, settings, preview=False)
 
-        # A5 = 148 x 210 mm a 300 dpi
+        # A5 = 148 x 210 mm a 300 dpi: el ancho limita, la proporción se conserva
         self.assertEqual(scale, 1.0)
-        self.assertEqual(screens["C"].shape, (2480, 1748))
+        self.assertEqual(screens["C"].shape, (2185, 1748))
+        # La película mide el lienzo completo
+        self.assertEqual(output.finish_positive(screens["C"], "C", settings).shape, (2480, 1748))
 
     def test_preview_is_reduced_but_keeps_readable_cells(self):
-        settings = JobSettings(fit_to_paper=True, paper_width_mm=297, paper_height_mm=420, dpi=300, lpi=45)
+        settings = JobSettings(placement="fit", paper_width_mm=297, paper_height_mm=420, dpi=300, lpi=45)
         image = np.full((100, 70, 3), 128, dtype=np.uint8)
 
         _, screens, scale = render(image, None, settings, preview=True)
@@ -116,16 +119,17 @@ class CoreTests(unittest.TestCase):
         self.assertGreaterEqual(settings.cell_px * scale, 4.0)
 
     def test_registration_guides_do_not_rescale_the_screen(self):
-        settings = JobSettings(fit_to_paper=True, registration_guides=True,
+        settings = JobSettings(placement="fit", registration_guides=True,
                                paper_width_mm=100, paper_height_mm=150, dpi=300)
-        screen = np.full(settings.paper_px[::-1], 255, dtype=np.uint8)
+        margin = settings.guide_margin_px
+        paper_w, paper_h = settings.paper_px
+        screen = np.full((paper_h - 2 * margin, paper_w - 2 * margin), 255, dtype=np.uint8)
         screen[::7, ::7] = 0
 
         positive = output.add_registration_guides(screen, "C", settings)
 
-        margin = int(settings.guide_margin_mm / 25.4 * settings.dpi)
-        paper_w, paper_h = settings.paper_px
-        self.assertEqual(positive.shape, (paper_h + 2 * margin, paper_w + 2 * margin))
+        # Las guías van dentro del lienzo: la película no crece
+        self.assertEqual(positive.shape, (paper_h, paper_w))
         inner = positive[margin + 400:margin + 800, margin + 400:margin + 800]
         np.testing.assert_array_equal(inner, screen[400:800, 400:800])
 
@@ -187,8 +191,9 @@ class CoreTests(unittest.TestCase):
         window.process_cmyk()
 
         white = window.channel_arrays["W"]
+        h, w = white.shape
         self.assertEqual(white[0, 0], 0)
-        self.assertGreater(white[10, 10], 200)
+        self.assertGreater(white[h // 2, w // 2], 200)
         # La transparencia no se separa como tinta negra
         self.assertEqual(window.channel_arrays["K"][0, 0], 0)
         window.close()
@@ -271,7 +276,9 @@ class CoreTests(unittest.TestCase):
         self.assertLess(lut[178], 178)  # un 70 % pedido va a la película más claro
 
     def test_film_options_mirror_negative_and_tiff(self):
-        settings = JobSettings(mirror=True, negative=True, output_format="tiff", dpi=600)
+        # Lienzo del mismo tamaño que la trama (60 × 40 px a 600 dpi)
+        settings = JobSettings(mirror=True, negative=True, output_format="tiff", dpi=600,
+                               paper_width_mm=60 / 600 * 25.4, paper_height_mm=40 / 600 * 25.4)
         screen = np.full((40, 60), 255, dtype=np.uint8)
         screen[:, :10] = 0
 
@@ -286,15 +293,18 @@ class CoreTests(unittest.TestCase):
                 self.assertAlmostEqual(im.info["dpi"][0], 600, places=0)
 
     def test_films_carry_a_control_strip_in_the_margin(self):
-        settings = JobSettings(fit_to_paper=True, registration_guides=True, control_strip=True,
+        settings = JobSettings(placement="fit", registration_guides=True, control_strip=True,
                                paper_width_mm=150, paper_height_mm=100)
-        blank = np.full(settings.paper_px[::-1], 255, dtype=np.uint8)
+        margin = settings.guide_margin_px
+        paper_w, paper_h = settings.paper_px
+        blank = np.full((paper_h - 2 * margin, paper_w - 2 * margin), 255, dtype=np.uint8)
         with_strip = output.finish_positive(blank, "C", settings)
         settings.control_strip = False
         without = output.finish_positive(blank, "C", settings)
 
-        margin = int(settings.guide_margin_mm / 25.4 * settings.dpi)
-        bottom = slice(margin + settings.paper_px[1] + 2, None)
+        # La tira va dentro del lienzo, en el margen inferior
+        self.assertEqual(with_strip.shape, (paper_h, paper_w))
+        bottom = slice(paper_h - margin + 2, None)
         self.assertGreater((with_strip[bottom] == 0).sum(), (without[bottom] == 0).sum() * 3)
 
     def test_dot_gain_template_has_one_patch_per_lpi_and_tone(self):
@@ -589,11 +599,12 @@ class CoreTests(unittest.TestCase):
 
     def test_fit_to_paper_fills_the_limiting_side_exactly(self):
         image = np.full((1104, 736, 3), 128, dtype=np.uint8)
-        settings = JobSettings(fit_to_paper=True, paper_width_mm=300, paper_height_mm=400, dpi=300)
+        settings = JobSettings(placement="fit", paper_width_mm=300, paper_height_mm=400, dpi=300)
         _, screens, _ = render(image, None, settings)
         paper_w, paper_h = settings.paper_px
-        self.assertEqual(screens["K"].shape, (paper_h, paper_w))
-        ink_rows = np.where((screens["K"] == 0).any(axis=1))[0]
+        film = output.finish_positive(screens["K"], "K", settings)
+        self.assertEqual(film.shape, (paper_h, paper_w))
+        ink_rows = np.where((film == 0).any(axis=1))[0]
         width_mm, height_mm = design_size_mm(image.shape, settings)
         self.assertAlmostEqual(height_mm, 400, delta=0.2)
         self.assertAlmostEqual(width_mm, 400 * 736 / 1104, delta=0.3)
@@ -602,24 +613,27 @@ class CoreTests(unittest.TestCase):
     def test_without_fit_the_image_prints_at_its_own_physical_size(self):
         image = np.full((1104, 736, 3), 128, dtype=np.uint8)   # 72 dpi → 259.6 × 389.5 mm
         for factor in (1.0, 2.0):
-            settings = JobSettings(fit_to_paper=False, source_dpi=72, dpi=300, resolution_factor=factor)
+            settings = JobSettings(placement="real", source_dpi=72, dpi=300, resolution_factor=factor,
+                                   paper_width_mm=400, paper_height_mm=500)
             _, screens, _ = render(image, None, settings)
             h, w = screens["K"].shape
             self.assertAlmostEqual(w / 300 * 25.4, 736 / 72 * 25.4, delta=0.2)
             self.assertAlmostEqual(h / 300 * 25.4, 1104 / 72 * 25.4, delta=0.2)
         width_mm, height_mm = design_size_mm(image.shape, settings)
         self.assertAlmostEqual(width_mm, 259.6, delta=0.1)
-        # Con guías y papel A4 el diseño (26 × 39 cm) no cabe: se ajusta al papel
-        guided = JobSettings(fit_to_paper=False, source_dpi=72, dpi=300, registration_guides=True,
+        # En lienzo A4 con guías el diseño (26 × 39 cm) no cabe: se reduce al área útil, sin cortar
+        guided = JobSettings(placement="real", source_dpi=72, dpi=300, registration_guides=True,
                              paper_width_mm=210, paper_height_mm=297)
-        self.assertAlmostEqual(design_size_mm(image.shape, guided)[1], 297, delta=0.2)
+        placed = layout(image.shape, guided)
+        self.assertTrue(placed.reduced)
+        self.assertAlmostEqual(placed.mm(300)[1], 297 - 2 * guided.guide_margin_mm, delta=0.2)
 
     def test_custom_size_in_every_unit_reaches_the_film(self):
         window = SimpleHalftoneApp()
         window._set_loaded_image(np.full((400, 300, 3), 90, dtype=np.uint8))
         window.image_info = {"dpi_x": 150.0, "dpi_y": 150.0, "width_px": 300, "height_px": 400}
         window.print_format_combo.setCurrentText("Personalizado")
-        window.fit_format_cb.setChecked(True)
+        window.placement_combo.setCurrentIndex(window.placement_combo.findData("fit"))
         units = [window.unit_combo.itemText(i).split()[0] for i in range(window.unit_combo.count())]
         window.unit_combo.setCurrentIndex(units.index("mm"))
         window.custom_width.setValue(300)
@@ -644,7 +658,7 @@ class CoreTests(unittest.TestCase):
         window.print_format_combo.setCurrentText("Personalizado")
         window.custom_width.setValue(280)
         window.custom_height.setValue(350)
-        window.fit_format_cb.setChecked(True)
+        window.placement_combo.setCurrentIndex(window.placement_combo.findData("fit"))
         window.guides_cb.setChecked(False)
         window.process_cmyk()
         with tempfile.TemporaryDirectory() as folder, \
@@ -661,6 +675,71 @@ class CoreTests(unittest.TestCase):
         self.assertAlmostEqual(size_mm[1], 350, delta=0.1)
         self.assertIn("Diseño impreso: 233.3 × 350.0 mm", spec)
         window.close()
+
+    # ---------------------------------------------------------------- lienzo primero
+
+    def _ink_box(self, film):
+        rows = np.where((film == 0).any(axis=1))[0]
+        cols = np.where((film == 0).any(axis=0))[0]
+        return rows.min(), rows.max(), cols.min(), cols.max()
+
+    def test_film_always_measures_the_canvas_and_the_design_is_never_cut(self):
+        image = np.zeros((1104, 736, 3), dtype=np.uint8)            # negro sólido: todo es tinta
+        for placement in ("fit", "real", "width"):
+            for guides in (False, True):
+                settings = JobSettings(mode="mono", placement=placement, design_width_mm=900, source_dpi=72,
+                                       registration_guides=guides, control_strip=False, dpi=150,
+                                       paper_width_mm=210, paper_height_mm=297)
+                _, screens, _ = render(image, None, settings)
+                film = output.finish_positive(screens["K"], "K", settings)
+                paper_w, paper_h = settings.paper_px
+                self.assertEqual(film.shape, (paper_h, paper_w), (placement, guides))
+                placed = layout(image.shape, settings)
+                x, y = placed.offset
+                w, h = placed.design
+                # El diseño completo (sin recorte) está dentro del área útil
+                self.assertEqual(screens["K"].shape, (h, w))
+                self.assertTrue((film[y:y + h, x:x + w] == 0).all(), (placement, guides))
+                margin = settings.guide_margin_px
+                self.assertGreaterEqual(x, margin)
+                self.assertLessEqual(x + w, paper_w - margin)
+                self.assertLessEqual(y + h, paper_h - margin)
+
+    def test_design_width_and_top_alignment(self):
+        image = np.full((400, 300, 3), 60, dtype=np.uint8)
+        settings = JobSettings(placement="width", design_width_mm=250, align="top", registration_guides=True,
+                               paper_width_mm=400, paper_height_mm=500, dpi=300)
+        placed = layout(image.shape, settings)
+        width_mm, height_mm = placed.mm(300)
+        self.assertAlmostEqual(width_mm, 250, delta=0.1)
+        self.assertAlmostEqual(height_mm, 250 * 400 / 300, delta=0.2)
+        self.assertFalse(placed.reduced)
+        self.assertEqual(placed.offset[1], settings.guide_margin_px)                   # arriba
+        self.assertAlmostEqual(placed.offset[0] + placed.design[0] / 2, settings.paper_px[0] / 2, delta=1)
+
+    def test_guides_are_drawn_inside_the_canvas(self):
+        settings = JobSettings(placement="fit", registration_guides=True, control_strip=True,
+                               paper_width_mm=200, paper_height_mm=250, dpi=300)
+        _, screens, _ = render(np.full((200, 160, 3), 255, dtype=np.uint8), None, settings)
+        film = output.finish_positive(screens["K"], "K", settings)
+        self.assertEqual(film.shape, settings.paper_px[::-1])
+        margin = settings.guide_margin_px
+        # Cruz de registro en la esquina del área útil
+        self.assertTrue((film[margin, margin - 5:margin + 5] == 0).all())
+
+    def test_old_jobs_with_fit_to_paper_load_as_placement(self):
+        self.assertEqual(JobSettings.from_dict({"fit_to_paper": True}).placement, "fit")
+        self.assertEqual(JobSettings.from_dict({"fit_to_paper": False}).placement, "real")
+        self.assertNotIn("fit_to_paper", JobSettings().to_dict())
+
+    def test_canvas_preview_shows_the_whole_canvas(self):
+        settings = JobSettings(placement="fit", registration_guides=True, paper_width_mm=300, paper_height_mm=400)
+        design = np.zeros((500, 300, 3), dtype=np.uint8)
+        preview = output.canvas_preview(design, settings, 0.2, (255, 255, 255))
+        paper_w, paper_h = settings.paper_px
+        self.assertAlmostEqual(preview.shape[1] / preview.shape[0], paper_w / paper_h, delta=0.01)
+        self.assertLessEqual(max(preview.shape[:2]), 1600)
+        self.assertTrue((preview[preview.shape[0] // 2, preview.shape[1] // 2] == 0).all())
 
     def test_gray_base_is_named_and_simulated_with_its_color(self):
         red = [220, 30, 30]
@@ -733,7 +812,7 @@ class CoreTests(unittest.TestCase):
 
     def test_resolution_advice_for_solid_spot_colors(self):
         spots = [{"id": "S1", "name": "Negro", "rgb": [0, 0, 0], "halftone": False}]
-        settings = JobSettings(mode="spot", spot_colors=spots, lpi=45, fit_to_paper=True,
+        settings = JobSettings(mode="spot", spot_colors=spots, lpi=45, placement="fit",
                                paper_width_mm=254, paper_height_mm=254)
         level, message = doc_input.resolution_advice((1000, 1000), 72, settings)   # 100 dpi
         self.assertEqual(level, "riesgo")
@@ -741,7 +820,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(doc_input.resolution_advice((2000, 2000), 72, settings)[0], "ok")
 
     def test_resolution_advice_uses_the_final_size(self):
-        settings = JobSettings(fit_to_paper=True, paper_width_mm=254, paper_height_mm=254, lpi=60)
+        settings = JobSettings(placement="fit", paper_width_mm=254, paper_height_mm=254, lpi=60)
         level, message = doc_input.resolution_advice((1000, 1000), 72, settings)   # 100 dpi en 10", ideal 120
         self.assertEqual(level, "aviso")
         self.assertIn("100 dpi", message)
@@ -815,7 +894,7 @@ class CoreTests(unittest.TestCase):
             with open(os.path.join(images, "notas.txt"), "w") as f:
                 f.write("no es imagen")
             config = os.path.join(folder, "trabajo.json")
-            JobSettings(lpi=30, output_format="tiff", registration_guides=True, fit_to_paper=True,
+            JobSettings(lpi=30, output_format="tiff", registration_guides=True, placement="fit",
                         paper_width_mm=60, paper_height_mm=60).save(config)
             out = os.path.join(folder, "salida")
             with mock.patch("sys.stdout", new=io.StringIO()):
@@ -908,7 +987,7 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(any("Adobe RGB" in note for note in document.notes))
 
     def test_cmyk_tiff_embeds_the_profile_and_films_are_labeled(self):
-        settings = JobSettings(icc_profile=self.GRACOL, registration_guides=True, fit_to_paper=True,
+        settings = JobSettings(icc_profile=self.GRACOL, registration_guides=True, placement="fit",
                                paper_width_mm=80, paper_height_mm=60)
         image = np.full((40, 50, 3), 120, dtype=np.uint8)
         channels, screens, _ = render(image, None, settings)

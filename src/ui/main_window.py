@@ -33,7 +33,7 @@ from .pdf_selector import PDFPageSelector
 from . import theme
 from ..core.job import JobSettings
 from ..core.screening import screen_channel
-from ..core.separation import design_size_mm, render
+from ..core.separation import design_size_mm, layout, render
 from ..core import mesh as mesh_rules
 from ..core import output
 from ..core import icc
@@ -963,22 +963,50 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             control.valueChanged.connect(self.on_output_size_changed)
         self.custom_size_widget.setVisible(False)
         format_layout.addWidget(self.custom_size_widget)
+        placement_row = QtWidgets.QGridLayout()
+        placement_row.setHorizontalSpacing(10)
+        placement_row.setColumnStretch(1, 1)
+        placement_row.addWidget(field_label("Imagen"), 0, 0)
+        self.placement_combo = compact_combo(QtWidgets.QComboBox())
+        self.placement_combo.addItem("Ajustar al lienzo", "fit")
+        self.placement_combo.addItem("Tamaño real", "real")
+        self.placement_combo.addItem("Ancho del diseño", "width")
+        self.placement_combo.setToolTip(
+            "El lienzo es la medida de la película. La imagen se coloca dentro: ajustada al área útil, "
+            "a su tamaño real (según sus DPI) o a un ancho fijo. Nunca se corta: si no cabe, se reduce.")
+        placement_row.addWidget(self.placement_combo, 0, 1)
+        self.design_width_spin = QtWidgets.QDoubleSpinBox()
+        self.design_width_spin.setRange(10, 2000)
+        self.design_width_spin.setDecimals(1)
+        self.design_width_spin.setSuffix(" mm")
+        self.design_width_spin.setValue(280)
+        self.design_width_spin.setVisible(False)
+        placement_row.addWidget(self.design_width_spin, 1, 1)
+        placement_row.addWidget(field_label("Posición"), 2, 0)
+        self.align_combo = compact_combo(QtWidgets.QComboBox())
+        self.align_combo.addItem("Centrada", "center")
+        self.align_combo.addItem("Arriba al centro", "top")
+        placement_row.addWidget(self.align_combo, 2, 1)
+        format_layout.addLayout(placement_row)
+        self.placement_combo.currentIndexChanged.connect(self.on_placement_changed)
+        self.design_width_spin.valueChanged.connect(self.on_output_size_changed)
+        self.align_combo.currentIndexChanged.connect(self.on_output_size_changed)
         self.design_size_label = secondary_label("")
+        self.design_size_label.setWordWrap(True)
         format_layout.addWidget(self.design_size_label)
 
         options_grid = QtWidgets.QGridLayout()
         options_grid.setHorizontalSpacing(12)
         options_grid.setVerticalSpacing(4)
-        self.fit_format_cb = QtWidgets.QCheckBox("Ajustar al formato")
-        self.fit_format_cb.setToolTip("Escala la imagen al papel y genera la trama a la resolución de salida")
         self.guides_cb = QtWidgets.QCheckBox("Guías de registro")
+        self.guides_cb.setToolTip("Cruces, marcas de centro, datos del canal y tira de control dentro del "
+                                  "margen del lienzo: la película no crece")
         self.white_base_cb = QtWidgets.QCheckBox("Base blanca")
         self.white_base_cb.setToolTip("Para prenda oscura: se imprime primero y se contrae 2 px en los bordes")
         self.show_halftones_cb = QtWidgets.QCheckBox("Ver trama")
         self.show_halftones_cb.setChecked(True)
         self.show_halftones_cb.stateChanged.connect(self.update_preview)
-        options_grid.addWidget(self.fit_format_cb, 0, 0)
-        options_grid.addWidget(self.guides_cb, 0, 1)
+        options_grid.addWidget(self.guides_cb, 0, 0)
         options_grid.addWidget(self.white_base_cb, 1, 0)
         options_grid.addWidget(self.show_halftones_cb, 1, 1)
         format_layout.addLayout(options_grid)
@@ -1276,7 +1304,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.smooth_edges_cb.stateChanged.connect(self.schedule_reseparation)
         self.input_profile_combo.currentIndexChanged.connect(self.on_input_profile_changed)
         self.lpi_combo.currentTextChanged.connect(lambda *_: self.update_resolution_advice())
-        self.fit_format_cb.stateChanged.connect(self.on_output_size_changed)
+        self.guides_cb.stateChanged.connect(self.on_output_size_changed)
         self.output_dpi_combo.currentIndexChanged.connect(self.on_output_size_changed)
         self.print_format_combo.currentIndexChanged.connect(lambda *_: self.update_resolution_advice())
         self.ink_limit_spin.valueChanged.connect(self.schedule_reseparation)
@@ -1577,17 +1605,23 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         if self.preview_cache:
             self.schedule_reseparation()
 
+    def on_placement_changed(self, *_):
+        self.design_width_spin.setVisible(self.placement_combo.currentData() == 'width')
+        self.on_output_size_changed()
+
     def design_size_text(self, settings=None):
         if self.image is None:
             return ""
         settings = settings or self.job_settings()
-        width, height = design_size_mm(self.image.shape, settings)
-        native_dpi = settings.source_dpi if settings.source_dpi > 0 else settings.dpi
-        native_w = self.image.shape[1] / native_dpi * 25.4
-        if settings.fit_to_paper or abs(width - native_w) > 0.05:
-            return (f"El diseño sale de {width:.1f} × {height:.1f} mm dentro del papel de "
-                    f"{settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm (se conserva la proporción).")
-        return f"El diseño sale a su tamaño propio: {width:.1f} × {height:.1f} mm."
+        placed = layout(self.image.shape, settings)
+        width, height = placed.mm(settings.dpi)
+        area_w, area_h = placed.area[2] / settings.dpi * 25.4, placed.area[3] / settings.dpi * 25.4
+        text = (f"Lienzo {settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm"
+                + (f" (área útil {area_w:.0f} × {area_h:.0f} mm, guías en el margen)" if settings.registration_guides else "")
+                + f". Diseño: {width:.1f} × {height:.1f} mm.")
+        if placed.reduced:
+            text += " No cabía al tamaño pedido: se redujo al área útil para no cortarlo."
+        return text
 
     def update_resolution_advice(self):
         """Resolución efectiva al tamaño final frente a la lineatura elegida."""
@@ -2438,7 +2472,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             control_strip=self.control_strip_cb.isChecked(),
             paper_width_mm=float(print_format["width"]),
             paper_height_mm=float(print_format["height"]),
-            fit_to_paper=self.fit_format_cb.isChecked(),
+            placement=self.placement_combo.currentData(),
+            design_width_mm=self.design_width_spin.value(),
+            align=self.align_combo.currentData(),
             source_dpi=float((self.image_info or {}).get('dpi_x') or 0),
             registration_guides=self.guides_cb.isChecked(),
             denoise=self.denoise_combo.currentData(),
@@ -2527,7 +2563,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.set_spot_colors(settings.spot_colors)
         for ch, spin in self.density_spins.items():
             spin.setValue(settings.density.get(ch, 100.0))
-        self.fit_format_cb.setChecked(settings.fit_to_paper)
+        self.placement_combo.setCurrentIndex(max(0, self.placement_combo.findData(settings.placement)))
+        if settings.design_width_mm > 0:
+            self.design_width_spin.setValue(settings.design_width_mm)
+        self.align_combo.setCurrentIndex(max(0, self.align_combo.findData(settings.align)))
         self.guides_cb.setChecked(settings.registration_guides)
         self.white_base_cb.setChecked(settings.white_base)
         self.channel_thresholds.update(settings.thresholds)
@@ -2616,6 +2655,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             ink_color_rgb = self.channel_colors[channel_name].getRgb()[:3]
             dot_locations = halftone_mask == 0
             canvas[dot_locations] = ink_color_rgb
+            # Se muestra dentro del lienzo: se ve dónde cae el diseño en la película
+            canvas = np.ascontiguousarray(output.canvas_preview(canvas, self.job_settings(), self.preview_scale, garment_rgb))
+            h, w = canvas.shape[:2]
 
             # Convertir a QPixmap de forma optimizada
             qimage = QtGui.QImage(canvas.data, w, h, w * 3, QtGui.QImage.Format_RGB888)
@@ -2698,7 +2740,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             image = sim.dot_risk_overlay(printed, self.channel_arrays, settings, self.preview_scale)
         else:
             image = printed
-        image = np.ascontiguousarray(image)
+        image = np.ascontiguousarray(output.canvas_preview(image, settings, self.preview_scale, garment))
         h, w = image.shape[:2]
         qimage = QtGui.QImage(image.data, w, h, w * 3, QtGui.QImage.Format_RGB888)
         self.preview_label.setPixmap(QtGui.QPixmap.fromImage(qimage.copy()))
@@ -2757,7 +2799,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                              f"{report['min_line_mm']:.2f} mm que se taparán")
         if self.image is not None:
             width, height = design_size_mm(self.image.shape, settings)
-            parts.insert(0, f"diseño {width:.1f} × {height:.1f} mm")
+            parts.insert(0, f"diseño {width:.1f} × {height:.1f} mm en lienzo de "
+                            f"{settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm")
         parts.append(f"vista previa al {self.preview_scale:.0%}")
         self.status_bar.showMessage("Separado: " + "; ".join(parts) + ".")
 
@@ -3267,7 +3310,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                                             positive, settings)
                 saved_files.append(os.path.basename(path))
                 positives.append(positive)
-                clean_pages.append(output.place_on_paper(screen, settings) if settings.fit_to_paper else screen)
+                clean_pages.append(output.place_on_paper(screen, settings))
 
             pdf_name = f"cmyk_limpio_{timestamp}.pdf"
             output.save_pdf(os.path.join(folder_path, pdf_name), clean_pages, settings.dpi)
@@ -3323,13 +3366,15 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             if self.image_info:
                 f.write(f"Imagen: {os.path.basename(self.image_info.get('file_path', ''))}\n")
             f.write("\nSALIDA\n")
-            f.write(f"  Papel: {settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm\n")
+            f.write(f"  Lienzo: {settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm\n")
             f.write(f"  Positivo: {width_px} × {height_px} px = "
                     f"{width_px / settings.dpi * 25.4:.1f} × {height_px / settings.dpi * 25.4:.1f} mm\n")
             design_w, design_h = design_size_mm(self.image.shape, settings)
             f.write(f"  Diseño impreso: {design_w:.1f} × {design_h:.1f} mm\n")
             f.write(f"  Resolución: {settings.dpi} DPI\n")
-            f.write(f"  Ajustar al papel: {'sí' if settings.fit_to_paper else 'no'}\n")
+            placement = {'fit': 'ajustada al lienzo', 'real': 'tamaño real',
+                         'width': f'ancho fijo {settings.design_width_mm:g} mm'}.get(settings.placement, settings.placement)
+            f.write(f"  Imagen: {placement}, {'arriba al centro' if settings.align == 'top' else 'centrada'}\n")
             f.write(f"  Guías de registro: {'sí' if settings.registration_guides else 'no'}\n")
             f.write("\nTRAMA\n")
             f.write(f"  Lineatura: {settings.lpi:g} LPI (celda {settings.cell_px:.2f} px)\n")

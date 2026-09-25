@@ -47,9 +47,14 @@ class JobSettings:
     control_strip: bool = True           # tira 5-95 % en el margen (requiere guías)
     paper_width_mm: float = 210.0
     paper_height_mm: float = 297.0
-    fit_to_paper: bool = False
-    # DPI propio de la imagen: sin «ajustar al papel» se imprime a su tamaño
-    # físico (px / source_dpi). 0 = desconocido: 1 px de imagen = 1 px de salida.
+    # Lienzo primero: la película mide siempre paper_width_mm × paper_height_mm.
+    # Con guías, las marcas van DENTRO del lienzo, en un margen de guide_margin_mm;
+    # el diseño se coloca en el área útil que queda y nunca se corta.
+    placement: str = 'real'              # fit (ajustar al área) | real (tamaño propio) | width (ancho fijo)
+    design_width_mm: float = 0.0         # ancho del diseño con placement='width'
+    align: str = 'center'                # center | top (pecho: arriba al centro)
+    # DPI propio de la imagen para el tamaño real (px / source_dpi).
+    # 0 = desconocido: 1 px de imagen = 1 px de salida.
     source_dpi: float = 0.0
     registration_guides: bool = False
     guide_margin_mm: float = REGISTRATION_GUIDE_SETTINGS['margin_mm']
@@ -108,6 +113,14 @@ class JobSettings:
         return (round(self.paper_width_mm / 25.4 * self.dpi),
                 round(self.paper_height_mm / 25.4 * self.dpi))
 
+    @property
+    def fit_to_paper(self):
+        return self.placement == 'fit'
+
+    @property
+    def guide_margin_px(self):
+        return round(self.guide_margin_mm / 25.4 * self.dpi) if self.registration_guides else 0
+
     def ink_channels(self):
         """Canales de tinta de la técnica actual (sin base blanca)."""
         if self.mode in ('spot', 'index'):
@@ -149,6 +162,10 @@ class JobSettings:
     @classmethod
     def from_dict(cls, data):
         known = {f.name for f in fields(cls)}
+        data = dict(data)
+        if 'placement' not in data and 'fit_to_paper' in data:
+            # Trabajos guardados antes del lienzo
+            data['placement'] = 'fit' if data['fit_to_paper'] else 'real'
         settings = cls(**{k: v for k, v in data.items() if k in known})
         # Rellenar canales que falten en archivos antiguos
         settings.angles = {**CMYK_ANGLES, **settings.angles}

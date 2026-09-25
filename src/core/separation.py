@@ -1,7 +1,7 @@
 """
 Separación de color y preparación de la imagen a la resolución de salida.
 
-Flujo: imagen → prepare_image (mejora + ajuste al papel, a DPI de salida)
+Flujo: imagen → prepare_image (mejora + tamaño en el lienzo, a DPI de salida)
        → separate_channels (C, M, Y, K y base blanca, 0-255 = % de tinta)
        → screening.screen_channel (trama por canal)
 """
@@ -9,7 +9,7 @@ Flujo: imagen → prepare_image (mejora + ajuste al papel, a DPI de salida)
 import cv2
 import numpy as np
 
-from .image_processing import enhance_image_resolution, generate_white_base, resize_to_print_format
+from .image_processing import enhance_image_resolution, generate_white_base
 from . import enhance, icc
 from .screening import BAND_ROWS, screen_channel
 from .spot import separate_index, separate_spot, spot_masks_for_cmyk
@@ -18,68 +18,80 @@ PREVIEW_MAX_SIDE = 1600
 PREVIEW_MIN_CELL_PX = 4.0
 
 
-def _paper_format(settings):
-    return {'width': settings.paper_width_mm, 'height': settings.paper_height_mm, 'name': 'papel'}
+class Layout:
+    """
+    Colocación del diseño en el lienzo, en píxeles de salida.
+
+    canvas: (ancho, alto) del lienzo = película. area: (x, y, ancho, alto) del
+    área útil (el lienzo menos el margen de las guías). design: (ancho, alto)
+    del diseño. offset: (x, y) de su esquina. reduced: el tamaño pedido no
+    cabía y se redujo al área útil (nunca se corta).
+    """
+
+    def __init__(self, canvas, area, design, offset, reduced):
+        self.canvas, self.area, self.design, self.offset, self.reduced = canvas, area, design, offset, reduced
+
+    def mm(self, dpi):
+        return self.design[0] / dpi * 25.4, self.design[1] / dpi * 25.4
 
 
-def needs_paper_fit(image_shape, settings):
-    """Se ajusta al papel si se pide, o si hay guías y la imagen no cabe."""
-    if settings.fit_to_paper:
-        return True
-    if settings.registration_guides:
-        paper_w, paper_h = settings.paper_px
-        return image_shape[1] > paper_w or image_shape[0] > paper_h
-    return False
+def canvas_offset(design_w, design_h, settings):
+    """Esquina del diseño en el lienzo: centrado, o arriba al centro."""
+    canvas_w, canvas_h = settings.paper_px
+    margin = settings.guide_margin_px
+    area_w, area_h = max(1, canvas_w - 2 * margin), max(1, canvas_h - 2 * margin)
+    x = margin + max(0, (area_w - design_w) // 2)
+    y = margin if settings.align == 'top' else margin + max(0, (area_h - design_h) // 2)
+    return x, y
+
+
+def layout(image_shape, settings):
+    """Dónde y a qué tamaño va la imagen dentro del lienzo."""
+    canvas_w, canvas_h = settings.paper_px
+    margin = settings.guide_margin_px
+    area_w, area_h = max(1, canvas_w - 2 * margin), max(1, canvas_h - 2 * margin)
+    h, w = image_shape[:2]
+    fit = min(area_w / w, area_h / h)
+    if settings.placement == 'width' and settings.design_width_mm > 0:
+        scale = settings.design_width_mm / 25.4 * settings.dpi / w
+    elif settings.placement == 'real':
+        # Sin DPI conocido: 1 px de la imagen (ya mejorada) = 1 px de salida
+        scale = settings.dpi / settings.source_dpi if settings.source_dpi > 0 else settings.resolution_factor
+    else:
+        scale = fit
+    reduced = False
+    if round(w * scale) > area_w or round(h * scale) > area_h:
+        # No cabe en el área útil: se reduce conservando la proporción
+        scale, reduced = fit, settings.placement != 'fit'
+    design = (min(area_w, max(1, round(w * scale))), min(area_h, max(1, round(h * scale))))
+    offset = canvas_offset(design[0], design[1], settings)
+    return Layout((canvas_w, canvas_h), (margin, margin, area_w, area_h), design, offset, reduced)
 
 
 def prepare_image(image, alpha, settings):
     """
-    Devuelve (bgr, alpha) a la resolución final del positivo. La trama se
-    genera sobre esta imagen: si se tramara antes y luego se reescalara, el
-    LPI real dependería de la foto.
+    Devuelve (bgr, alpha) del diseño al tamaño final que ocupa en el lienzo,
+    a la resolución de salida. La trama se genera sobre esta imagen: si se
+    tramara antes y luego se reescalara, el LPI real dependería de la foto.
+    La colocación en el lienzo la hace output.finish_positive.
     """
     # El ruido JPEG se limpia a la resolución original, donde está
     source = enhance.denoise(image, settings.denoise)
     working = enhance_image_resolution(source, settings.resolution_factor, settings.resolution_method)
-    if not settings.fit_to_paper and settings.source_dpi > 0:
-        # Sin ajustar: la imagen sale a su tamaño físico (px / DPI propio). La
-        # mejora de resolución solo aporta detalle, no cambia el tamaño.
-        target = (max(1, round(image.shape[1] * settings.dpi / settings.source_dpi)),
-                  max(1, round(image.shape[0] * settings.dpi / settings.source_dpi)))
-        if target != (working.shape[1], working.shape[0]):
-            shrink = target[0] < working.shape[1]
-            working = cv2.resize(working, target, interpolation=cv2.INTER_AREA if shrink else cv2.INTER_CUBIC)
+    # La mejora de resolución solo aporta detalle: el tamaño lo decide el lienzo
+    target = layout(image.shape, settings).design
+    if target != (working.shape[1], working.shape[0]):
+        shrink = target[0] < working.shape[1]
+        working = cv2.resize(working, target, interpolation=cv2.INTER_AREA if shrink else cv2.INTER_CUBIC)
     if alpha is not None:
-        alpha = cv2.resize(alpha, (working.shape[1], working.shape[0]), interpolation=cv2.INTER_LINEAR)
-
-    if needs_paper_fit(working.shape, settings):
-        if alpha is None:
-            # Imagen opaca: solo el margen agregado queda sin base
-            alpha = np.full(working.shape[:2], 255, dtype=np.uint8)
-        paper = _paper_format(settings)
-        working = resize_to_print_format(working, paper, settings.dpi)
-        alpha = resize_to_print_format(alpha, paper, settings.dpi, background=0)
-
+        alpha = cv2.resize(alpha, target, interpolation=cv2.INTER_LINEAR)
     working = enhance.sharpen(working, settings.sharpen)
     return working, alpha
 
 
 def design_size_mm(image_shape, settings):
-    """
-    Tamaño final del diseño impreso (ancho, alto) en mm, tal como saldrá en
-    la película. Con «ajustar al papel» se conserva la proporción: el lado que
-    limita ocupa el papel y el otro queda más corto.
-    """
-    h, w = image_shape[:2]
-    native_dpi = settings.source_dpi if settings.source_dpi > 0 else settings.dpi
-    native = (w / native_dpi * 25.4, h / native_dpi * 25.4)
-    native_px = (round(w * settings.dpi / native_dpi), round(h * settings.dpi / native_dpi))
-    if needs_paper_fit((native_px[1], native_px[0]), settings):
-        paper_w, paper_h = settings.paper_px
-        scale = min(paper_w / w, paper_h / h)
-        fitted = (min(paper_w, round(w * scale)), min(paper_h, round(h * scale)))
-        return fitted[0] / settings.dpi * 25.4, fitted[1] / settings.dpi * 25.4
-    return native
+    """Tamaño final del diseño impreso (ancho, alto) en mm, tal como saldrá en la película."""
+    return layout(image_shape, settings).mm(settings.dpi)
 
 
 def source_pixel_size(original_shape, prepared_shape):

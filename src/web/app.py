@@ -30,7 +30,7 @@ from ..core import output
 from ..core import simulate as sim
 from ..core.color import detect_palette, match_library, read_library
 from ..core.job import JobSettings
-from ..core.separation import design_size_mm, render
+from ..core.separation import layout, render
 from ..core.spot import default_needs_base, order_light_to_dark
 from ..utils.constants import (
     ANGLE_PRESETS, BASE_PRESETS, CMYK_ANGLES, LPI_OPTIONS, POINT_SHAPES, SEPARATION_MODES,
@@ -74,7 +74,7 @@ def _settings(raw, document=None):
         data = json.loads(raw) if raw else {}
         job = JobSettings.from_dict(data)
         if document is not None:
-            job.source_dpi = document.dpi   # tamaño propio de la imagen sin «ajustar al papel»
+            job.source_dpi = document.dpi   # para colocar la imagen a su tamaño real
         return job
     except (ValueError, TypeError) as e:
         raise HTTPException(400, f"Configuración inválida: {e}")
@@ -225,8 +225,11 @@ def preview(doc_id: str = Form(...), settings: str = Form("{}"), view: str = For
         printed = sim.dot_risk_overlay(printed, channels, job, scale)
     report = sim.quality_report(channels, job, scale)
     advice = doc_input.resolution_advice(document.bgr.shape, document.dpi, job)
-    design = design_size_mm(document.bgr.shape, job)
+    placed = layout(document.bgr.shape, job)
+    design = placed.mm(job.dpi)
+    printed = output.canvas_preview(printed, job, scale, job.garment_rgb)
     return {"image": _png_base64(printed), "scale": scale, "design_mm": [round(design[0], 1), round(design[1], 1)],
+            "canvas_mm": [job.paper_width_mm, job.paper_height_mm], "reduced": placed.reduced,
             "channels": [{"id": c, "name": job.channel_name(c), "angle": job.channel_angle(c),
                           "rgb": list(_ink_colors(job).get(c, (128, 128, 128)))} for c in job.channels()],
             "report": report, "resolution": {"level": advice[0], "message": advice[1]}}

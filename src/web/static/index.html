@@ -179,7 +179,7 @@
 
       <fieldset>
         <legend>Salida</legend>
-        <div class="row"><label for="paper">Papel</label><select id="paper" class="span2"></select></div>
+        <div class="row"><label for="paper">Lienzo</label><select id="paper" class="span2"></select></div>
         <div class="row" id="customRow" hidden><label for="customW">Medida (mm)</label>
           <input type="number" id="customW" value="300" min="10" max="2000" step="0.5" aria-label="Ancho en mm">
           <input type="number" id="customH" value="400" min="10" max="2000" step="0.5" aria-label="Alto en mm"></div>
@@ -187,8 +187,15 @@
           <option>300</option><option>600</option><option>720</option><option>1200</option></select></div>
         <div class="row"><label for="format">Archivo</label><select id="format" class="span2">
           <option value="png">PNG</option><option value="tiff">TIFF 1 bit (RIP)</option></select></div>
+        <div class="row"><label for="placement">Imagen</label><select id="placement" class="span2">
+          <option value="fit">Ajustar al lienzo</option><option value="real">Tamaño real</option>
+          <option value="width">Ancho del diseño…</option></select></div>
+        <div class="row" id="designWidthRow" hidden><label for="designWidth">Ancho (mm)</label>
+          <input type="number" id="designWidth" class="span2" value="280" min="10" max="2000" step="0.5"></div>
+        <div class="row"><label for="align">Posición</label><select id="align" class="span2">
+          <option value="center">Centrada</option><option value="top">Arriba al centro</option></select></div>
+        <p class="hint">La película mide el lienzo. Las guías van dentro de su margen y la imagen nunca se corta: si no cabe, se reduce.</p>
         <div class="checks">
-          <label><input type="checkbox" id="fit" checked> Ajustar al papel</label>
           <label><input type="checkbox" id="guides" checked> Guías de registro</label>
           <label><input type="checkbox" id="strip" checked> Tira de control</label>
           <label><input type="checkbox" id="mirror"> Espejo</label>
@@ -250,7 +257,8 @@ function currentSettings() {
     angles: o.angle_presets[$("angles").value] || o.default_angles,
     min_dot: +$("minDot").value, max_dot: +$("maxDot").value, dot_gain: +$("gain").value,
     dpi: +$("dpi").value, paper_width_mm: pw, paper_height_mm: ph,
-    fit_to_paper: $("fit").checked, registration_guides: $("guides").checked,
+    placement: $("placement").value, design_width_mm: +$("designWidth").value, align: $("align").value,
+    registration_guides: $("guides").checked,
     control_strip: $("strip").checked, mirror: $("mirror").checked, negative: $("negative").checked,
     output_format: $("format").value, ink_limit: +$("inkLimit").value, ink_type: $("inkType").value,
     substrate: $("substrate").value, white_base: $("whiteBase").checked,
@@ -337,7 +345,8 @@ async function runPreview() {
       if (thin.specks) parts.push(`${thin.specks} motas sueltas en ${inkName(id)} (sube «Limpiar motas»)`);
       if (thin.gaps > 0.002) parts.push(`${inkName(id)} tiene huecos de menos de ${rep.min_line_mm.toFixed(2)} mm que se taparán`);
     }
-    parts.unshift(`diseño ${r.design_mm[0].toFixed(1)} × ${r.design_mm[1].toFixed(1)} mm`);
+    parts.unshift(`diseño ${r.design_mm[0].toFixed(1)} × ${r.design_mm[1].toFixed(1)} mm en lienzo de ${r.canvas_mm[0]} × ${r.canvas_mm[1]} mm`
+                  + (r.reduced ? " (no cabía: se redujo al área útil)" : ""));
     parts.push(`vista previa al ${(r.scale * 100).toFixed(0)} %`);
     setStatus(parts.join("; ") + ". " + r.resolution.message);
   } catch (e) {
@@ -438,6 +447,7 @@ async function init() {
   fillSelect($("inkType"), Object.keys(o.ink_types).map(k => [k, k]));
   fillSelect($("paper"), Object.keys(o.papers).map(k => [k, k]), "A3");
   $("paper").addEventListener("change", () => { $("customRow").hidden = $("paper").value !== "Personalizado"; });
+  $("placement").addEventListener("change", () => { $("designWidthRow").hidden = $("placement").value !== "width"; });
   $("customW").addEventListener("change", schedule); $("customH").addEventListener("change", schedule);
   fillSelect($("iccIntent"), o.intents.map(k => [k, k]));
   fillSelect($("base"), [...Object.keys(o.bases).map(k => [k, k]), ["Personalizada", "custom"]], "Base blanca");
@@ -490,7 +500,7 @@ async function init() {
     } catch (e) { setStatus(e.message, true); }
   };
   for (const id of ["shape", "angles", "minDot", "maxDot", "gain", "garment", "inkType", "inkLimit", "whiteBase",
-                    "paper", "fit", "guides", "strip", "mirror", "negative", "trap", "despeckle", "denoise", "sharpen", "smoothEdges", "tolerance", "indexRes", "misreg", "dpi"]) {
+                    "paper", "placement", "designWidth", "align", "guides", "strip", "mirror", "negative", "trap", "despeckle", "denoise", "sharpen", "smoothEdges", "tolerance", "indexRes", "misreg", "dpi"]) {
     $(id).addEventListener("change", schedule);
   }
   checkMesh();

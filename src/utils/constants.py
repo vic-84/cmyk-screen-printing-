@@ -162,7 +162,10 @@ POINT_SHAPES = {
     "Lineal": "line"
 }
 
-CMYK_ANGLES = {'C': 15, 'M': 75, 'Y': 0, 'K': 45, 'W': 90}  # Agregamos base blanca
+# Ángulos para serigrafía: el juego offset (15/75/0/45) desplazado 7.5° para no
+# alinear ninguna placa con los hilos de la malla (0°/90°/45°). Con punto redondo
+# 90° equivale a 0°, por eso la base blanca no puede ir a 90° (chocaría con Y).
+CMYK_ANGLES = {'C': 22.5, 'M': 52.5, 'Y': 7.5, 'K': 82.5, 'W': 37.5}
 CHANNEL_NAMES = ["C", "M", "Y", "K", "W"]  # Incluimos base blanca
 
 # Configuraciones de resolución
@@ -179,9 +182,13 @@ WHITE_BASE_SETTINGS = {
     "enabled": True,
     "lpi": 45,  # Lineatura específica para base blanca
     "opacity_threshold": 240,  # Umbral para detectar áreas que necesitan base
-    "expansion_pixels": 2,  # Expansión del área de base blanca
+    "choke_pixels": 2,  # Contracción de la base para que no asome por los bordes
     "shape": "circle"  # Forma específica para base blanca
 }
+
+# Separación de color
+GCR_AMOUNT = 0.8        # Fracción del gris común (min C,M,Y) que se pasa a negro
+TOTAL_INK_LIMIT = 260   # Límite de tinta total (TAC) en %, textil: 240-280
 # Agregar esto al inicio de tu archivo main_window.py o en constants.py
 
 PRINT_FORMATS = {

@@ -1974,16 +1974,18 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         """
         Método auxiliar para obtener los parámetros de halftone actuales desde la UI.
         """
+        # La celda se mide en píxeles del archivo de salida: celda = DPI / LPI.
+        # Se deja en float; truncarla a int desviaba el LPI real (45 LPI salía a 50).
         try:
             lpi = int(self.lpi_combo.currentText().split()[0])
-            dpi = self.custom_dpi.value() if self.print_format_combo.currentText() == "Personalizado" else 300
-            scale = max(2, int(dpi / lpi))
-        except (ValueError, IndexError):
-            scale = 6 # Valor por defecto si falla la lectura
+            dpi = self.get_current_print_format()["dpi_recommended"]
+            scale = max(2.0, dpi / lpi)
+        except (ValueError, IndexError, KeyError, ZeroDivisionError):
+            scale = 6.0 # Valor por defecto si falla la lectura
 
         shape = POINT_SHAPES[self.shape_combo.currentText()]
-        angles = {'C': 15, 'M': 75, 'Y': 0, 'K': 45, 'W': 90} # Ángulos fijos profesionales
-        
+        angles = dict(CMYK_ANGLES)
+
         return scale, shape, angles
     
     def reset_all_to_defaults(self):
@@ -2087,14 +2089,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         """
         Ángulos estándar para evitar interferencias (moiré)
         """
-        angles = {
-            'C': 15,   # Cian: 15°
-            'M': 75,   # Magenta: 75°
-            'Y': 0,    # Amarillo: 0°
-            'K': 45,   # Negro: 45°
-            'W': 30    # Blanco: 30°
-        }
-        return angles.get(channel_name, 15)
+        return CMYK_ANGLES.get(channel_name, CMYK_ANGLES['C'])
 
     def create_dot_pattern(self, width, height, dot_size, angle):
         """
@@ -2193,29 +2188,36 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         Este método interno reemplaza la llamada a la función externa.
         """
         # Crear una grilla de coordenadas
+        # float32: a tamaño de impresión (A3 @ 300 dpi ≈ 17 Mpx) float64 duplica la RAM
         h, w = image_data.shape
-        x_coords, y_coords = np.meshgrid(np.arange(w), np.arange(h))
+        x_coords, y_coords = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
 
         # Rotar las coordenadas según el ángulo
         angle_rad = np.radians(angle)
-        cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
+        cos_a, sin_a = np.float32(np.cos(angle_rad)), np.float32(np.sin(angle_rad))
         x_rot = x_coords * cos_a + y_coords * sin_a
         y_rot = -x_coords * sin_a + y_coords * cos_a
+        del x_coords, y_coords
 
         # Normalizar la imagen de entrada (0.0 a 1.0)
         image_norm = image_data.astype(np.float32) / 255.0
 
-        # Generar el patrón de puntos basado en la forma seleccionada
+        # Posición dentro de la celda, centrada en el punto (-scale/2 .. scale/2)
+        dx = (x_rot % scale) - scale / 2
+        dy = (y_rot % scale) - scale / 2
+
+        # Patrón normalizado: 0 en el centro del punto, 1 en la esquina de la celda
         if shape == 'line':
-            pattern = (y_rot % scale) / scale
+            pattern = np.abs(dy) / (scale / 2)
         elif shape == 'ellipse':
-            pattern = np.sqrt(((x_rot % scale) - scale / 2)**2 + ((y_rot % (scale/2)) - scale / 4)**2)
-            pattern /= np.sqrt((scale/2)**2 + (scale/4)**2)
-        else: # Círculo o Diamante (usamos círculo como base)
-            pattern = np.sqrt(((x_rot % scale) - scale / 2)**2 + ((y_rot % scale) - scale / 2)**2)
+            aspect = 1.4  # Eje menor = 1/1.4 del mayor; celda cuadrada, misma lineatura
+            pattern = np.sqrt(dx**2 + (dy * aspect)**2)
+            pattern /= np.sqrt((scale / 2)**2 + (scale / 2 * aspect)**2)
+        elif shape == 'diamond':
+            pattern = (np.abs(dx) + np.abs(dy)) / scale
+        else: # Círculo
+            pattern = np.sqrt(dx**2 + dy**2)
             pattern /= (scale / np.sqrt(2))
-            if shape == 'diamond':
-                pattern = (pattern + ((x_rot % scale) / scale + (y_rot % scale) / scale))/2
 
 
         # Crear la máscara de semitonos comparando la imagen con el patrón
@@ -3245,7 +3247,14 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 filename = f"POSITIVO_{channel}_{timestamp}.png"
                 filepath = os.path.join(folder_path, filename)
                 
-                success = cv2.imwrite(filepath, final_img)
+                # PIL guarda el DPI en el PNG; con cv2.imwrite el RIP asumía 72/96 dpi
+                # y el positivo salía a otro tamaño físico.
+                try:
+                    Image.fromarray(final_img).save(filepath, dpi=(output_dpi, output_dpi))
+                    success = True
+                except (OSError, ValueError) as save_error:
+                    print(f"   ❌ {save_error}")
+                    success = False
                 if success:
                     saved_files.append(filename)
                     file_size = os.path.getsize(filepath) / (1024 * 1024)
@@ -3282,7 +3291,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             
             if images_clean:
                 pdf_path_clean = os.path.join(folder_path, f"cmyk_limpio_{timestamp}.pdf")
-                images_clean[0].save(pdf_path_clean, save_all=True, append_images=images_clean[1:])
+                images_clean[0].save(pdf_path_clean, save_all=True, append_images=images_clean[1:],
+                                     resolution=output_dpi)
                 saved_files.append(f"cmyk_limpio_{timestamp}.pdf")
                 print(f"✅ PDF limpio creado: cmyk_limpio_{timestamp}.pdf")
 
@@ -3299,7 +3309,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                         
                 if images_with_guides:
                     pdf_path_guides = os.path.join(folder_path, f"cmyk_con_guias_{timestamp}.pdf")
-                    images_with_guides[0].save(pdf_path_guides, save_all=True, append_images=images_with_guides[1:])
+                    images_with_guides[0].save(pdf_path_guides, save_all=True, append_images=images_with_guides[1:],
+                                                resolution=output_dpi)
                     saved_files.append(f"cmyk_con_guias_{timestamp}.pdf")
                     print(f"✅ PDF con guías creado: cmyk_con_guias_{timestamp}.pdf")
             
@@ -3668,24 +3679,31 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         try:
             resolution_settings = self.get_current_resolution_settings()
             working_image = enhance_image_resolution(self.image, **resolution_settings)
+
+            # La trama se genera a la resolución final del positivo. Si se tramara
+            # a la resolución de la foto y luego se reescalara, el LPI real
+            # dependería de la foto y los puntos se deformarían.
+            if self.fit_format_cb.isChecked():
+                print_format = self.get_current_print_format()
+                working_image = resize_to_print_format(
+                    working_image, print_format, print_format["dpi_recommended"])
+
             rgb = cv2.cvtColor(working_image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
 
-            # --- CORRECCIÓN: Control de Generación de Negro (Black Generation) ---
-            # 1. Se calcula el canal K (Negro) de forma estándar.
-            K_heavy = 1 - np.max(rgb, axis=2)
+            # --- Separación con GCR y límite de tinta total ---
+            # La fórmula (1-R-K)/(1-K) con K reducido deja C=M=Y=100% en el negro
+            # puro (390% de tinta). Aquí el gris común se RESTA de C, M, Y.
+            cmy = 1.0 - rgb
+            K = cmy.min(axis=2) * GCR_AMOUNT
+            cmy -= K[..., np.newaxis]
 
-            # 2. Se aplica un factor de reducción para que el negro no sea tan dominante.
-            #    Un valor de 0.9 significa que usamos el 90% de la fuerza del negro,
-            #    dejando más espacio para los otros colores en las sombras.
-            black_generation_factor = 0.9
-            K = K_heavy * black_generation_factor
+            # Donde C+M+Y+K supera el límite, se reduce C, M, Y proporcionalmente
+            ink_limit = TOTAL_INK_LIMIT / 100.0
+            cmy_sum = cmy.sum(axis=2)
+            reduction = np.clip((ink_limit - K) / np.maximum(cmy_sum, 1e-6), 0.0, 1.0)
+            cmy *= reduction[..., np.newaxis]
+            C, M, Y = cmy[..., 0], cmy[..., 1], cmy[..., 2]
 
-            # 3. Se calculan C, M, Y usando el nuevo canal K (menos intenso).
-            #    Esto hace que los otros canales retengan más color.
-            C = (1 - rgb[..., 0] - K) / (1 - K + 1e-10)
-            M = (1 - rgb[..., 1] - K) / (1 - K + 1e-10)
-            Y = (1 - rgb[..., 2] - K) / (1 - K + 1e-10)
-            
             # 5. Se guardan los canales finales.
             self.channel_arrays = {
                 'C': (np.clip(C, 0, 1) * 255).astype(np.uint8),
@@ -3695,7 +3713,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             }
             
             if self.white_base_cb.isChecked():
-                self.channel_arrays['W'] = generate_white_base(working_image)
+                self.channel_arrays['W'] = generate_white_base(
+                    working_image,
+                    WHITE_BASE_SETTINGS["opacity_threshold"],
+                    WHITE_BASE_SETTINGS["choke_pixels"])
 
             # --- Generación de Semitonos ---
             scale, shape, angles = self._get_halftone_params()

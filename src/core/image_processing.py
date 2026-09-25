@@ -62,7 +62,7 @@ def enhance_image_resolution(img, factor=2.0, method='INTER_CUBIC'):
         print(f"⚠️ Error mejorando resolución: {e}")
         return img.copy()
 
-def generate_white_base(img, threshold=240, expansion=2):
+def generate_white_base(img, threshold=240, choke=2):
     """Generar máscara de base blanca para serigrafía en playeras oscuras"""
     print("⚪ Generando base blanca automática...")
     
@@ -77,10 +77,11 @@ def generate_white_base(img, threshold=240, expansion=2):
         # Invertir: áreas oscuras en la imagen original serán blancas en la base
         white_base_mask = cv2.threshold(gray, threshold, 255, cv2.THRESH_BINARY_INV)[1]
         
-        # Expansión morfológica para asegurar cobertura
-        if expansion > 0:
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (expansion*2+1, expansion*2+1))
-            white_base_mask = cv2.morphologyEx(white_base_mask, cv2.MORPH_DILATE, kernel)
+        # Choke: la base se contrae para que no asome por los bordes del color
+        # cuando el registro de prensa no es perfecto
+        if choke > 0:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (choke*2+1, choke*2+1))
+            white_base_mask = cv2.morphologyEx(white_base_mask, cv2.MORPH_ERODE, kernel)
         
         # Suavizar bordes
         white_base_mask = cv2.GaussianBlur(white_base_mask, (3, 3), 0)

@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from src.core.image_processing import prepare_image_for_processing, rotate_image
 from src.ui.main_window import SimpleHalftoneApp
-from src.utils.constants import LPI_VALUES, MEASUREMENT_UNITS, POINT_SHAPES
+from src.utils.constants import LPI_VALUES, MEASUREMENT_UNITS, POINT_SHAPES, TOTAL_INK_LIMIT
 
 
 class CoreTests(unittest.TestCase):
@@ -54,6 +54,41 @@ class CoreTests(unittest.TestCase):
 
         self.assertGreater(ink_coverage, 0.45)
         self.assertLess(ink_coverage, 0.55)
+        window.close()
+
+    def test_pure_black_respects_total_ink_limit(self):
+        window = SimpleHalftoneApp()
+        window.image = np.zeros((10, 10, 3), dtype=np.uint8)
+        window.white_base_cb.setChecked(False)
+
+        window.process_cmyk()
+
+        total = sum(window.channel_arrays[c].astype(float) for c in "CMYK") / 255 * 100
+        self.assertLessEqual(total.max(), TOTAL_INK_LIMIT + 1)
+        self.assertGreater(window.channel_arrays["K"].max(), 200)
+        window.close()
+
+    def test_halftone_cell_matches_requested_lpi(self):
+        window = SimpleHalftoneApp()
+        window.print_format_combo.setCurrentText("A4")
+        window.lpi_combo.setCurrentText("45 LPI (malla 120)")
+
+        scale, _, _ = window._get_halftone_params()
+
+        self.assertAlmostEqual(scale, 300 / 45)
+        window.close()
+
+    def test_fit_format_generates_halftone_at_print_size(self):
+        window = SimpleHalftoneApp()
+        window.image = np.full((50, 40, 3), 128, dtype=np.uint8)
+        window.white_base_cb.setChecked(False)
+        window.print_format_combo.setCurrentText("A5")
+        window.fit_format_cb.setChecked(True)
+
+        window.process_cmyk()
+
+        # A5 = 148 x 210 mm a 300 dpi
+        self.assertEqual(window.preview_cache["C"].shape, (2480, 1748))
         window.close()
 
     def test_rotate_image_preserves_color_images(self):

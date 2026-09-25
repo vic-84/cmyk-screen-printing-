@@ -23,7 +23,7 @@ NEUTRAL_THRESHOLD = 128
 @dataclass
 class JobSettings:
     # Técnica
-    mode: str = 'cmyk'                   # cmyk | mono
+    mode: str = 'cmyk'                   # cmyk | mono | spot
 
     # Malla y trama
     mesh_tpi: float = 200.0              # hilos por pulgada
@@ -63,6 +63,13 @@ class JobSettings:
     white_base_threshold: int = WHITE_BASE_SETTINGS['opacity_threshold']
     white_base_choke_px: int = WHITE_BASE_SETTINGS['choke_pixels']
 
+    # Color plano: [{'id', 'name', 'rgb', 'halftone', 'opaque', 'base', 'library'}]
+    spot_colors: list = field(default_factory=list)
+    garment_rgb: list = field(default_factory=lambda: [255, 255, 255])
+    trap_mm: float = 0.0
+    spot_softness: float = 12.0          # ΔE: cuánto se reparte una tinta con semitono
+    spot_angle: float = 22.5
+
     # Canales: umbral 128 = sin ajuste; menor = más tinta. Densidad en %.
     thresholds: dict = field(default_factory=lambda: {c: NEUTRAL_THRESHOLD for c in 'CMYKW'})
     density: dict = field(default_factory=lambda: {c: 100.0 for c in 'CMYKW'})
@@ -79,14 +86,36 @@ class JobSettings:
         return (int(self.paper_width_mm / 25.4 * self.dpi),
                 int(self.paper_height_mm / 25.4 * self.dpi))
 
+    def ink_channels(self):
+        """Canales de tinta de la técnica actual (sin base blanca)."""
+        if self.mode == 'spot':
+            return [spot['id'] for spot in self.spot_colors]
+        return list(MONO_CHANNELS if self.mode == 'mono' else PROCESS_CHANNELS)
+
     def channels(self):
-        """Canales que se generan, en orden de impresión."""
-        base = MONO_CHANNELS if self.mode == 'mono' else PROCESS_CHANNELS
-        active = set(base) | ({'W'} if self.white_base else set())
-        return [c for c in self.channel_order if c in active]
+        """Canales que se generan, en orden de impresión (la base siempre primero)."""
+        active = self.ink_channels() + (['W'] if self.white_base else [])
+        ordered = [c for c in self.channel_order if c in active]
+        missing = [c for c in active if c not in ordered]
+        ordered += missing
+        if 'W' in ordered:
+            ordered.remove('W')
+            ordered.insert(0, 'W')
+        return ordered
+
+    def spot(self, channel):
+        return next((spot for spot in self.spot_colors if spot['id'] == channel), None)
 
     def channel_name(self, channel):
+        spot = self.spot(channel)
+        if spot:
+            return spot.get('name') or channel
         return CHANNEL_NAMES.get(channel, channel)
+
+    def channel_angle(self, channel):
+        if self.spot(channel):
+            return self.angles.get(channel, self.spot_angle)
+        return self.angles.get(channel, 0.0)
 
     def to_dict(self):
         return asdict(self)

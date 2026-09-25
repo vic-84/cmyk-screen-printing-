@@ -40,6 +40,8 @@ from ..core.screening import halftone, screen_channel
 from ..core.separation import needs_paper_fit, render
 from ..core import mesh as mesh_rules
 from ..core import output
+from ..core.color import detect_palette, lab_to_rgb, match_library, read_library, rgb_to_lab, write_ase
+from ..core.spot import default_needs_base, order_light_to_dark
 from ..core import tone as tone_rules
 
 
@@ -94,9 +96,10 @@ class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
     """
     ROW_HEIGHT = 30
 
-    def __init__(self, color_for_channel, angle_for_channel=None, parent=None):
+    def __init__(self, color_for_channel, angle_for_channel=None, parent=None, name_for_channel=None):
         super().__init__(parent)
         self._color_for_channel = color_for_channel
+        self._name_for_channel = name_for_channel or (lambda ch: CHANNEL_NAMES.get(ch, ch))
         self._angle_for_channel = angle_for_channel or (lambda ch: CMYK_ANGLES.get(ch))
 
     def sizeHint(self, option, index):
@@ -126,7 +129,7 @@ class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
         text_rect = rect.adjusted(54, 0, -12, 0)
         painter.setPen(QtGui.QColor(theme.TEXTO))
         painter.drawText(text_rect, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft,
-                         CHANNEL_NAMES.get(channel, channel))
+                         self._name_for_channel(channel))
         painter.setPen(QtGui.QColor(theme.TEXTO_SUAVE))
         angle = self._angle_for_channel(channel)
         if angle is not None:
@@ -490,6 +493,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.channel_arrays = {}
         self.preview_scale = 1.0
         self.dot_gain_curve = []
+        self.spot_colors = []
+        self.color_library = []
+        self._next_spot_number = 1
         self.output_dir = "outputs"
         os.makedirs(self.output_dir, exist_ok=True)
         self.channel_order = ['W', 'Y', 'C', 'M', 'K']
@@ -662,6 +668,85 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         params_layout.addWidget(self.resolution_combo, 6, 1, 1, 2)
         controls_layout.addWidget(params_group)
 
+        # === COLOR PLANO ===
+        self.spot_group = QtWidgets.QGroupBox("Color plano")
+        spot_layout = QtWidgets.QVBoxLayout(self.spot_group)
+        spot_layout.setSpacing(6)
+
+        detect_row = QtWidgets.QHBoxLayout()
+        detect_row.addWidget(field_label("Colores"))
+        self.spot_count_spin = QtWidgets.QSpinBox()
+        self.spot_count_spin.setRange(1, 16)
+        self.spot_count_spin.setValue(6)
+        detect_row.addWidget(self.spot_count_spin)
+        self.detect_spots_btn = QtWidgets.QPushButton("Detectar colores")
+        self.detect_spots_btn.setToolTip("Busca los colores dominantes de la imagen (sin contar el color de la prenda)")
+        self.detect_spots_btn.clicked.connect(self.detect_spot_colors)
+        detect_row.addWidget(self.detect_spots_btn, 1)
+        spot_layout.addLayout(detect_row)
+
+        self.spot_table = QtWidgets.QTableWidget(0, 5)
+        self.spot_table.setHorizontalHeaderLabels(["", "Tinta", "Semitono", "Cubriente", "Base"])
+        self.spot_table.verticalHeader().setVisible(False)
+        header = self.spot_table.horizontalHeader()
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        for column in (0, 2, 3, 4):
+            header.setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeToContents)
+        self.spot_table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.spot_table.setMinimumHeight(170)
+        self.spot_table.setToolTip("Doble clic en la muestra para cambiar el color. "
+                                   "Semitono: la tinta lleva puntos en sus degradados. "
+                                   "Base: se imprime blanco debajo en prenda oscura.")
+        self.spot_table.itemChanged.connect(self.on_spot_table_edited)
+        self.spot_table.cellDoubleClicked.connect(self.on_spot_cell_double_clicked)
+        spot_layout.addWidget(self.spot_table)
+
+        spot_buttons = QtWidgets.QGridLayout()
+        spot_buttons.setSpacing(6)
+        for i, (text, handler, tip) in enumerate([
+                ("Agregar…", self.add_spot_color, "Agregar una tinta eligiendo el color"),
+                ("Quitar", self.remove_spot_colors, "Quitar las tintas seleccionadas"),
+                ("Unir", self.merge_spot_colors, "Unir las tintas seleccionadas en una sola"),
+                ("Biblioteca…", self.import_color_library, "Importar muestras ASE o CSV (p. ej. Pantone exportado de tu software)"),
+                ("Igualar", self.match_spot_colors, "Asignar a cada tinta la muestra más cercana de la biblioteca (ΔE2000)"),
+                ("Exportar ASE…", self.export_spot_palette, "Guardar la paleta del trabajo como biblioteca ASE")]):
+            button = QtWidgets.QPushButton(text)
+            button.setToolTip(tip)
+            button.clicked.connect(handler)
+            spot_buttons.addWidget(button, i // 3, i % 3)
+        spot_layout.addLayout(spot_buttons)
+
+        spot_grid = QtWidgets.QGridLayout()
+        spot_grid.setHorizontalSpacing(10)
+        spot_grid.setColumnStretch(1, 1)
+        spot_grid.addWidget(field_label("Trapping"), 0, 0)
+        self.trap_spin = QtWidgets.QDoubleSpinBox()
+        self.trap_spin.setRange(0, 2)
+        self.trap_spin.setSingleStep(0.05)
+        self.trap_spin.setDecimals(2)
+        self.trap_spin.setSuffix(" mm")
+        self.trap_spin.setToolTip("Cuánto se expande cada color bajo los colores más oscuros vecinos")
+        spot_grid.addWidget(self.trap_spin, 0, 1)
+        spot_grid.addWidget(field_label("Reparto de semitono"), 1, 0)
+        self.spot_softness_spin = QtWidgets.QDoubleSpinBox()
+        self.spot_softness_spin.setRange(3, 40)
+        self.spot_softness_spin.setValue(12)
+        self.spot_softness_spin.setSuffix(" ΔE")
+        self.spot_softness_spin.setToolTip("Más alto = degradados más amplios en las tintas con semitono")
+        spot_grid.addWidget(self.spot_softness_spin, 1, 1)
+        spot_grid.addWidget(field_label("Ángulo de trama"), 2, 0)
+        self.spot_angle_spin = QtWidgets.QDoubleSpinBox()
+        self.spot_angle_spin.setRange(0, 179.5)
+        self.spot_angle_spin.setDecimals(1)
+        self.spot_angle_spin.setValue(22.5)
+        self.spot_angle_spin.setSuffix(" °")
+        spot_grid.addWidget(self.spot_angle_spin, 2, 1)
+        spot_layout.addLayout(spot_grid)
+        self.spot_library_label = secondary_label("Sin biblioteca de color cargada.")
+        spot_layout.addWidget(self.spot_library_label)
+        self.spot_group.setVisible(False)
+        controls_layout.addWidget(self.spot_group)
+
         # === TONO ===
         tone_group = QtWidgets.QGroupBox("Tono")
         tone_layout = QtWidgets.QGridLayout(tone_group)
@@ -807,8 +892,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.channel_list.setItemDelegate(
             ChannelScreenDelegate(
                 lambda ch: self.channel_colors.get(ch, QtGui.QColor("white")),
-                lambda ch: self.angle_spins[ch].value() if hasattr(self, 'angle_spins') else CMYK_ANGLES.get(ch),
-                self.channel_list))
+                self.channel_angle_for_list,
+                self.channel_list,
+                self.channel_display_name))
         self.channel_list.orderChanged.connect(self.set_channel_order)
         self.channel_list.itemSelectionChanged.connect(self.on_channel_selection_changed)
         self.channel_list.setFixedHeight(ChannelScreenDelegate.ROW_HEIGHT * 5 + 4)
@@ -994,6 +1080,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         self.lpi_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.mesh_spin.valueChanged.connect(self.update_moire_analysis)
+        self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
+        for control in (self.trap_spin, self.spot_softness_spin):
+            control.valueChanged.connect(self.schedule_reseparation)
+        self.spot_angle_spin.valueChanged.connect(self.schedule_rescreen)
         for control in (self.min_dot_spin, self.max_dot_spin, self.dot_gain_spin, *self.density_spins.values()):
             control.valueChanged.connect(self.schedule_rescreen)
         for control in (self.shape_combo, self.angle_preset_combo, self.lpi_combo):
@@ -1018,9 +1108,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         """Puebla o actualiza los items en la lista de canales."""
         self.channel_list.blockSignals(True)
         self.channel_list.clear()
-        for ch in self.channel_order:
+        for ch in self.list_channels():
             item = QtWidgets.QListWidgetItem(ch)
-            item.setToolTip(f"{CHANNEL_NAMES.get(ch, ch)}: arrastra para cambiar el orden de impresión")
+            item.setToolTip(f"{self.channel_display_name(ch)}: arrastra para cambiar el orden de impresión")
             self.channel_list.addItem(item)
         self.channel_list.blockSignals(False)
 
@@ -1186,18 +1276,40 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         result_label.setText(recommendation_html)
 
     def set_channel_order(self, new_order):
-        """Actualiza el orden de los canales y refresca la vista."""
-        self.channel_order = new_order
-        print(f"Nuevo orden de impresión: {self.channel_order}")
+        """Actualiza el orden (conserva los canales de otras técnicas) y refresca la vista."""
+        hidden = [c for c in self.channel_order if c not in new_order]
+        self.channel_order = list(new_order) + hidden
         self.update_preview()
+
+    def channel_angle_for_list(self, channel):
+        if channel in getattr(self, 'angle_spins', {}):
+            return self.angle_spins[channel].value()
+        if hasattr(self, 'spot_angle_spin'):
+            return self.spot_angle_spin.value()
+        return CMYK_ANGLES.get(channel)
+
+    def list_channels(self):
+        """Canales que muestra la lista: tintas de la técnica actual + base blanca."""
+        settings = self.job_settings()
+        visible = settings.ink_channels() + ['W']
+        ordered = [c for c in self.channel_order if c in visible]
+        return ordered + [c for c in visible if c not in ordered]
+
+    def channel_display_name(self, channel):
+        spot = next((sp for sp in self.spot_colors if sp['id'] == channel), None)
+        return spot['name'] if spot else CHANNEL_NAMES.get(channel, channel)
 
     def select_garment_color(self):
         """Permite al usuario seleccionar el color de fondo para la simulación."""
         color = QtWidgets.QColorDialog.getColor(self.garment_color, self)
         if color.isValid():
             self.garment_color = color
-            self.preview_label.setStyleSheet(f"background-color: {self.garment_color.name()};")
-            self.update_preview()
+            self.garment_color_btn.setText(f"Color de la prenda: {color.name().upper()}")
+            if self.spot_colors:
+                # La prenda cambia qué colores necesitan base y qué zona no se imprime
+                self.process_cmyk()
+            else:
+                self.update_preview()
 
     def load_image_or_pdf(self):
         """
@@ -1445,6 +1557,181 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "Error de Carga", f"No se pudo encontrar el archivo de base de datos: {os.path.basename(e.filename)}\nAsegúrate de que la carpeta 'data' exista y contenga los archivos .json.")
         except json.JSONDecodeError as e:
             QtWidgets.QMessageBox.critical(self, "Error de Carga", f"Error de formato en el archivo JSON: {e}")
+
+    # ------------------------------------------------------------ color plano
+
+    def on_mode_changed(self, *_):
+        mode = SEPARATION_MODES.get(self.mode_combo.currentText(), 'cmyk')
+        self.spot_group.setVisible(mode == 'spot')
+        self.update_channel_list_ui()
+        if self.image is not None and self.preview_cache:
+            self.process_cmyk()
+
+    def schedule_reseparation(self, *_):
+        """Repite la separación poco después del último cambio (trapping, reparto)."""
+        if not self.channel_arrays:
+            return
+        if not hasattr(self, '_reseparate_timer'):
+            self._reseparate_timer = QtCore.QTimer(self)
+            self._reseparate_timer.setSingleShot(True)
+            self._reseparate_timer.timeout.connect(self.process_cmyk)
+        self._reseparate_timer.start(400)
+
+    def _new_spot(self, rgb, name=None):
+        spot_id = f"S{self._next_spot_number}"
+        self._next_spot_number += 1
+        garment = list(self.garment_color.getRgb()[:3])
+        return {'id': spot_id, 'name': name or f"Tinta {spot_id[1:]}", 'rgb': [int(v) for v in rgb],
+                'halftone': False, 'opaque': True, 'base': bool(default_needs_base(rgb, garment)),
+                'library': ''}
+
+    def set_spot_colors(self, spots):
+        """Reemplaza la paleta, sincroniza colores de simulación y orden (claro → oscuro)."""
+        self.spot_colors = [dict(spot) for spot in spots]
+        numbers = [int(sp['id'][1:]) for sp in self.spot_colors if sp['id'][1:].isdigit()]
+        self._next_spot_number = max(numbers, default=0) + 1
+        for spot in self.spot_colors:
+            self.channel_colors[spot['id']] = QtGui.QColor(*spot['rgb'])
+        spot_ids = [sp['id'] for sp in order_light_to_dark(self.spot_colors)]
+        others = [c for c in self.channel_order if not c.startswith('S')]
+        self.channel_order = ['W'] + spot_ids + [c for c in others if c != 'W']
+        self.refresh_spot_table()
+        self.update_channel_list_ui()
+
+    def refresh_spot_table(self):
+        self.spot_table.blockSignals(True)
+        self.spot_table.setRowCount(len(self.spot_colors))
+        for row, spot in enumerate(self.spot_colors):
+            swatch = QtWidgets.QTableWidgetItem("")
+            swatch.setBackground(QtGui.QColor(*spot['rgb']))
+            swatch.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
+            swatch.setToolTip(f"RGB {tuple(spot['rgb'])}" + (f"\n{spot['library']}" if spot.get('library') else ""))
+            self.spot_table.setItem(row, 0, swatch)
+            name = QtWidgets.QTableWidgetItem(spot['name'])
+            name.setToolTip(spot.get('library') or "Doble clic para renombrar")
+            self.spot_table.setItem(row, 1, name)
+            for column, key in ((2, 'halftone'), (3, 'opaque'), (4, 'base')):
+                flag = QtWidgets.QTableWidgetItem("")
+                flag.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsSelectable)
+                flag.setCheckState(QtCore.Qt.Checked if spot.get(key) else QtCore.Qt.Unchecked)
+                self.spot_table.setItem(row, column, flag)
+        self.spot_table.blockSignals(False)
+
+    def on_spot_table_edited(self, item):
+        spot = self.spot_colors[item.row()]
+        if item.column() == 1:
+            spot['name'] = item.text().strip() or spot['name']
+            self.channel_list.viewport().update()
+            return
+        key = {2: 'halftone', 3: 'opaque', 4: 'base'}.get(item.column())
+        if key:
+            spot[key] = item.checkState() == QtCore.Qt.Checked
+            if key == 'opaque':
+                self.update_preview()
+            else:
+                self.schedule_reseparation()
+
+    def on_spot_cell_double_clicked(self, row, column):
+        if column != 0:
+            return
+        spot = self.spot_colors[row]
+        color = QtWidgets.QColorDialog.getColor(QtGui.QColor(*spot['rgb']), self, "Color de la tinta")
+        if color.isValid():
+            spot['rgb'] = list(color.getRgb()[:3])
+            spot['library'] = ''
+            self.set_spot_colors(self.spot_colors)
+            self.schedule_reseparation()
+
+    def detect_spot_colors(self):
+        if self.image is None:
+            QtWidgets.QMessageBox.information(self, "Sin imagen", "Abre una imagen para detectar sus colores.")
+            return
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            palette = detect_palette(self.image, self.spot_count_spin.value(), self.image_alpha,
+                                     list(self.garment_color.getRgb()[:3]))
+            self._next_spot_number = 1
+            spots = [self._new_spot(entry['rgb']) for entry in palette]
+            for spot, entry in zip(spots, palette):
+                spot['name'] = f"Tinta {spot['id'][1:]} ({entry['share']:.0%})"
+            self.set_spot_colors(spots)
+            if self.color_library:
+                self.match_spot_colors()
+            self.process_cmyk()
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+    def selected_spot_rows(self):
+        return sorted({index.row() for index in self.spot_table.selectedIndexes()})
+
+    def add_spot_color(self):
+        color = QtWidgets.QColorDialog.getColor(QtGui.QColor("#C8102E"), self, "Nueva tinta")
+        if color.isValid():
+            self.set_spot_colors(self.spot_colors + [self._new_spot(color.getRgb()[:3])])
+            self.schedule_reseparation()
+
+    def remove_spot_colors(self):
+        rows = self.selected_spot_rows()
+        if rows:
+            self.set_spot_colors([sp for i, sp in enumerate(self.spot_colors) if i not in rows])
+            self.schedule_reseparation()
+
+    def merge_spot_colors(self):
+        """Une las tintas seleccionadas en una (color promedio en Lab)."""
+        rows = self.selected_spot_rows()
+        if len(rows) < 2:
+            QtWidgets.QMessageBox.information(self, "Unir tintas", "Selecciona dos o más tintas para unirlas.")
+            return
+        merged_lab = rgb_to_lab([self.spot_colors[i]['rgb'] for i in rows]).mean(axis=0)
+        merged = dict(self.spot_colors[rows[0]])
+        merged['rgb'] = [int(v) for v in lab_to_rgb([merged_lab])[0]]
+        merged['library'] = ''
+        remaining = [sp for i, sp in enumerate(self.spot_colors) if i not in rows[1:]]
+        remaining[rows[0]] = merged
+        self.set_spot_colors(remaining)
+        self.schedule_reseparation()
+
+    def import_color_library(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Importar biblioteca de color", self.output_dir,
+            "Bibliotecas de color (*.ase *.csv *.txt);;Adobe Swatch Exchange (*.ase);;CSV (*.csv *.txt)")
+        if not path:
+            return
+        try:
+            library = read_library(path)
+        except (OSError, ValueError, UnicodeDecodeError) as e:
+            QtWidgets.QMessageBox.critical(self, "No se pudo leer la biblioteca",
+                                           f"{e}\n\nFormatos admitidos: ASE (Adobe) y CSV «nombre,#RRGGBB».")
+            return
+        if not library:
+            QtWidgets.QMessageBox.warning(self, "Biblioteca vacía", "El archivo no tiene muestras de color reconocibles.")
+            return
+        self.color_library = library
+        self.spot_library_label.setText(f"Biblioteca: {os.path.basename(path)} ({len(library)} muestras).")
+        if self.spot_colors:
+            self.match_spot_colors()
+
+    def match_spot_colors(self):
+        """Asigna a cada tinta la muestra más cercana de la biblioteca (ΔE2000)."""
+        if not self.color_library:
+            QtWidgets.QMessageBox.information(self, "Sin biblioteca", "Importa primero una biblioteca ASE o CSV.")
+            return
+        for spot in self.spot_colors:
+            entry, distance = match_library(spot['rgb'], self.color_library)
+            if entry:
+                spot['name'] = entry['name']
+                spot['rgb'] = list(entry['rgb'])
+                spot['library'] = f"{entry['name']}  (ΔE2000 {distance:.1f} respecto al color detectado)"
+        self.set_spot_colors(self.spot_colors)
+        self.schedule_reseparation()
+
+    def export_spot_palette(self):
+        if not self.spot_colors:
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Exportar paleta", self.output_dir, "ASE (*.ase)")
+        if path:
+            write_ase(path, [{'name': sp['name'], 'rgb': sp['rgb']} for sp in self.spot_colors])
+            self.status_bar.showMessage(f"Paleta exportada: {os.path.basename(path)}", 8000)
 
     def schedule_rescreen(self, *_):
         """Vuelve a tramar la vista previa poco después del último cambio de tono o trama."""
@@ -1982,6 +2269,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             thresholds=dict(self.channel_thresholds),
             density={ch: spin.value() for ch, spin in self.density_spins.items()},
             channel_order=list(self.channel_order),
+            spot_colors=[dict(spot) for spot in self.spot_colors],
+            garment_rgb=list(self.garment_color.getRgb()[:3]),
+            trap_mm=self.trap_spin.value(),
+            spot_softness=self.spot_softness_spin.value(),
+            spot_angle=self.spot_angle_spin.value(),
         )
 
     def apply_job_settings(self, settings):
@@ -2015,6 +2307,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.mirror_cb.setChecked(settings.mirror)
         self.negative_cb.setChecked(settings.negative)
         self.control_strip_cb.setChecked(settings.control_strip)
+        self.garment_color = QtGui.QColor(*settings.garment_rgb)
+        self.garment_color_btn.setText(f"Color de la prenda: {self.garment_color.name().upper()}")
+        self.trap_spin.setValue(settings.trap_mm)
+        self.spot_softness_spin.setValue(settings.spot_softness)
+        self.spot_angle_spin.setValue(settings.spot_angle)
+        self.set_spot_colors(settings.spot_colors)
         for ch, spin in self.density_spins.items():
             spin.setValue(settings.density.get(ch, 100.0))
         self.fit_format_cb.setChecked(settings.fit_to_paper)
@@ -2164,20 +2462,15 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             canvas = np.full((h, w, 3), garment_color_float, dtype=np.float32)
 
             # Determinar canales a mostrar (tu lógica existente)
-            channels_to_show = []
-            if self.white_base_cb.isChecked() and 'W' in self.preview_cache:
-                channels_to_show.append('W')
-            for ch in ['C', 'M', 'Y', 'K']:
-                if ch in self.preview_cache:
-                    channels_to_show.append(ch)
+            channels_to_show = [ch for ch in self.job_settings().channels() if ch in self.preview_cache]
 
             # Simulación de lo impreso: trama + ganancia de punto de la prensa,
             # o tono continuo si «Ver trama» está desactivado
             settings = self.job_settings()
             gain = tone_rules.GainModel.from_settings(settings)
             show_screen = self.show_halftones_cb.isChecked()
-            for channel in self.channel_order:
-                if channel in channels_to_show:
+            for channel in channels_to_show:
+                if True:
                     if show_screen:
                         mask = tone_rules.printed_ink(self.preview_cache[channel], gain,
                                                       settings.cell_px * self.preview_scale)
@@ -2187,7 +2480,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                     mask = mask[:, :, np.newaxis]
                     ink_rgb = np.array(self.channel_colors[channel].getRgbF()[:3], dtype=np.float32)
                     
-                    if channel == 'W':
+                    spot = settings.spot(channel)
+                    if channel == 'W' or (spot and spot.get('opaque')):
+                        # Tinta cubriente: tapa lo que hay debajo
                         canvas = (canvas * (1.0 - mask)) + (ink_rgb * mask)
                     else:
                         light_passing_through = 1.0 - ((1.0 - ink_rgb) * mask)

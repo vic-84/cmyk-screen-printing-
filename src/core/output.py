@@ -79,7 +79,7 @@ def add_registration_guides(screen, channel, settings):
     order = settings.channels()
     position = order.index(channel) + 1 if channel in order else 0
     label = (f"{position}/{len(order)} {settings.channel_name(channel)}  "
-             f"{settings.lpi:g} LPI  ang {settings.angles.get(channel, 0):g}  {dpi} DPI")
+             f"{settings.lpi:g} LPI  ang {settings.channel_angle(channel):g}  {dpi} DPI")
     text_height = max(10, int(margin * 0.22))
     put_text(canvas, label, (margin, max(text_height + 4, margin // 2)), text_height, max(1, thickness // 2))
 
@@ -105,7 +105,7 @@ def add_control_strip(canvas, channel, settings, margin, paper_h):
             break
         block = np.full((height, patch), int(round(tone_value * 2.55)), dtype=np.uint8)
         canvas[top:top + height, x:x + patch] = halftone(
-            block, settings.cell_px, settings.dot_shape, settings.angles.get(channel, 0.0))
+            block, settings.cell_px, settings.dot_shape, settings.channel_angle(channel))
         cv2.rectangle(canvas, (x, top), (x + patch - 1, top + height - 1), 0, 1)
     label_x = left + len(CONTROL_STRIP_TONES) * (patch + patch // 5)
     if label_x < canvas.shape[1] - margin:

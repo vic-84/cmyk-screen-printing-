@@ -188,6 +188,7 @@ CUSTOM_ANGLE_PRESET = "Personalizado"
 SEPARATION_MODES = {
     "Cuatricromía (CMYK)": "cmyk",
     "Semitono (1 tinta)": "mono",
+    "Color plano (spot)": "spot",
 }
 CHANNEL_NAMES = ["C", "M", "Y", "K", "W"]  # Incluimos base blanca
 

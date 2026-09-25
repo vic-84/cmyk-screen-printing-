@@ -110,4 +110,4 @@ def screen_channel(channel, name, settings, scale=1.0):
     from .tone import apply_tone  # tone importa adjust_levels de este módulo
     toned = apply_tone(channel, name, settings)
     cell = max(2.0, settings.cell_px * scale)
-    return halftone(toned, cell, settings.dot_shape, settings.angles.get(name, 0.0))
+    return halftone(toned, cell, settings.dot_shape, settings.channel_angle(name))

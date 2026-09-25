@@ -11,6 +11,7 @@ import numpy as np
 
 from .image_processing import enhance_image_resolution, generate_white_base, resize_to_print_format
 from .screening import BAND_ROWS, screen_channel
+from .spot import separate_spot
 
 PREVIEW_MAX_SIDE = 1600
 PREVIEW_MIN_CELL_PX = 4.0
@@ -79,6 +80,8 @@ def separate_cmyk(bgr, gcr, ink_limit):
 
 def separate_channels(bgr, alpha, settings, scale=1.0):
     """Canales de tinta continuos (sin tramar) para la imagen preparada."""
+    if settings.mode == 'spot':
+        return separate_spot(bgr, alpha, settings, scale)
     if settings.mode == 'mono':
         # Semitono de una tinta: la cantidad de tinta sigue la oscuridad de la imagen
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)

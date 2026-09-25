@@ -92,13 +92,19 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
 - **Impresión directa** (Archivo → Imprimir, Ctrl+P): una página por película a tamaño físico real; la app hace la trama, así que funciona sin PostScript.
 - Pruebas: 28.
 
-### Fase 4: Color plano (spot)
-- **Detección de colores** (agrupamiento en espacio Lab) con paleta editable: unir, quitar y asignar tinta.
-- Separación **sólida** y **sólido + semitono** para sombreado dentro del mismo color.
-- **Trapping** automático o manual: spread del color de encima y choke de la base, en mm.
-- **Eliminación de solapamientos** (knockout) y **retiro de base** bajo colores que no la necesitan.
-- Tinta **cubriente o transparente**: cambia la simulación y la necesidad de base.
-- Bibliotecas de color importables (ASE/ACB/CSV).
+### Fase 4: Color plano (spot) *(hecha)*
+- Técnica **Color plano (spot)** con panel propio (`src/core/spot.py`, `src/core/color.py`).
+- **Detección de colores**: k-means en Lab. Descarta el color de la prenda (ΔE < 8), porque esa zona no se imprime.
+- **Paleta editable**: nombre, color (doble clic en la muestra), agregar, quitar, **unir** (promedio en Lab) y exportar a ASE.
+- Opciones por tinta:
+  - **Sólido o con semitono**: con semitono, la tinta sigue la cercanía al color y los degradados salen en puntos.
+  - **Cubriente o transparente**: cambia la simulación.
+  - **Base**: se marca sola en prenda oscura para colores más claros que la prenda; desmarcarla la quita (underbase removal).
+- **Knockout**: con asignación exclusiva los colores sólidos no se solapan.
+- **Trapping** en mm: cada color se expande solo bajo los colores más oscuros vecinos, nunca hacia la prenda.
+- **Orden** automático: base primero y luego de claro a oscuro; se puede reordenar.
+- **Bibliotecas de color**: importa ASE (RGB/CMYK/Lab/gris) y CSV. **Igualar** asigna a cada tinta la muestra más cercana por **ΔE2000**, verificado con los datos de referencia de Sharma 2005. Pantone no se incluye por licencia; se importa la que tengas exportada.
+- Pruebas: 35.
 
 ### Fase 5: Simulación y control de calidad
 - Modelo de **opacidad de tinta** (plastisol, base agua, cubriente, transparente) sobre el color del sustrato.

@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from src.core.image_processing import generate_white_base, prepare_image_for_processing, rotate_image
 from src.core import mesh as mesh_rules
-from src.core import output, tone
+from src.core import color, output, tone
 from src.core.job import JobSettings
 from src.core.screening import adjust_levels, halftone
 from src.core.separation import render
@@ -26,8 +26,8 @@ class CoreTests(unittest.TestCase):
         cls.app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
     def setUp(self):
-        global QtWidgets
-        from PyQt5 import QtWidgets
+        global QtWidgets, QtGui
+        from PyQt5 import QtGui, QtWidgets
 
     def test_transparent_pixels_do_not_become_black_ink(self):
         image = np.array([[[0, 0, 0, 0], [30, 20, 10, 255]]], dtype=np.uint8)
@@ -309,6 +309,95 @@ class CoreTests(unittest.TestCase):
             with open(path, "rb") as f:
                 pdf = f.read()
         self.assertEqual(pdf.count(b"/Type /Page\n") + pdf.count(b"/Type /Page\r") + pdf.count(b"/Type /Page "), 2)
+
+    def _spot_test_image(self):
+        # Prenda negra con un bloque rojo y uno amarillo que se tocan (BGR)
+        image = np.zeros((120, 200, 3), dtype=np.uint8)
+        image[20:100, 20:100] = (0, 0, 230)
+        image[20:100, 100:180] = (0, 220, 255)
+        return image
+
+    def _spot_settings(self, **extra):
+        spots = [{"id": "S1", "name": "Rojo", "rgb": [230, 0, 0], "halftone": False, "opaque": True, "base": True},
+                 {"id": "S2", "name": "Amarillo", "rgb": [255, 220, 0], "halftone": False, "opaque": True, "base": True}]
+        return JobSettings(mode="spot", garment_rgb=[0, 0, 0], spot_colors=spots, **extra)
+
+    def test_palette_detection_finds_the_inks_and_skips_the_garment(self):
+        palette = color.detect_palette(self._spot_test_image(), 2, garment_rgb=[0, 0, 0])
+        found = [entry["rgb"] for entry in palette]
+        self.assertEqual(len(found), 2)
+        for expected in ([230, 0, 0], [255, 220, 0]):
+            self.assertTrue(any(np.abs(np.subtract(rgb, expected)).max() < 12 for rgb in found), found)
+
+    def test_solid_spot_colors_knock_out_each_other(self):
+        channels, _, _ = render(self._spot_test_image(), None, self._spot_settings())
+        red, yellow = channels["S1"] > 0, channels["S2"] > 0
+        self.assertFalse((red & yellow).any())
+        self.assertAlmostEqual(red.mean(), 80 * 80 / (120 * 200), delta=0.01)
+        self.assertEqual(channels["S1"][0, 0], 0)  # la prenda no se imprime
+
+    def test_trapping_spreads_the_light_color_under_the_dark_one(self):
+        settings = self._spot_settings(trap_mm=0.5, dpi=300)
+        channels, _, _ = render(self._spot_test_image(), None, settings)
+        yellow = channels["S2"] > 0
+        # El amarillo (claro) invade el rojo (oscuro) unos 6 px, pero no la prenda
+        self.assertTrue(yellow[60, 95])
+        self.assertFalse(yellow[60, 185])
+        self.assertFalse((channels["S1"][:, 101:] > 0).any())
+
+    def test_underbase_skips_colors_marked_without_base(self):
+        settings = self._spot_settings(white_base=True, white_base_choke_px=0)
+        settings.spot_colors[0]["base"] = False
+        channels, _, _ = render(self._spot_test_image(), None, settings)
+        self.assertEqual(channels["W"][60, 60], 0)
+        self.assertEqual(channels["W"][60, 140], 255)
+        self.assertEqual(settings.channels()[0], "W")
+
+    def test_halftone_spot_shades_gradients(self):
+        gradient = np.zeros((40, 256, 3), dtype=np.uint8)
+        gradient[:, :, 2] = np.arange(256, dtype=np.uint8)  # de negro a rojo
+        settings = self._spot_settings()
+        settings.spot_colors = [dict(settings.spot_colors[0], halftone=True)]
+        channels, _, _ = render(gradient, None, settings)
+        row = channels["S1"][20]
+        self.assertLess(row[30], row[128])
+        self.assertLess(row[128], row[250])
+        self.assertTrue(0 < row[128] < 255)
+
+    def test_color_libraries_round_trip_and_match(self):
+        library = [{"name": "PMS 186 C", "rgb": [200, 16, 46]}, {"name": "PMS 116 C", "rgb": [255, 205, 0]}]
+        with tempfile.TemporaryDirectory() as folder:
+            ase = os.path.join(folder, "lib.ase")
+            color.write_ase(ase, library)
+            loaded = color.read_library(ase)
+            csv_path = os.path.join(folder, "lib.csv")
+            with open(csv_path, "w", encoding="utf-8") as f:
+                f.write("Nombre,Hex\nPMS 186 C,#C8102E\nPMS 116 C,255,205,0\n")
+            from_csv = color.read_library(csv_path)
+        self.assertEqual([c["name"] for c in loaded], ["PMS 186 C", "PMS 116 C"])
+        self.assertEqual(loaded[0]["rgb"], [200, 16, 46])
+        self.assertEqual(from_csv[0]["rgb"], [200, 16, 46])
+        self.assertEqual(from_csv[1]["rgb"], [255, 205, 0])
+        entry, distance = color.match_library([210, 20, 40], loaded)
+        self.assertEqual(entry["name"], "PMS 186 C")
+        self.assertLess(distance, 5)
+
+    def test_spot_workflow_in_the_window(self):
+        window = SimpleHalftoneApp()
+        window._set_loaded_image(self._spot_test_image())
+        window.garment_color = QtGui.QColor(0, 0, 0)
+        window.mode_combo.setCurrentText("Color plano (spot)")
+        window.spot_count_spin.setValue(2)
+        window.white_base_cb.setChecked(True)
+        window.detect_spot_colors()
+
+        settings = window.job_settings()
+        self.assertEqual(len(settings.spot_colors), 2)
+        self.assertTrue(all(sp["base"] for sp in settings.spot_colors))
+        self.assertEqual(settings.channels()[0], "W")
+        self.assertEqual(set(window.preview_cache), {"W", "S1", "S2"})
+        self.assertEqual(window.channel_list.count(), 3)
+        window.close()
 
     def test_rotate_image_preserves_color_images(self):
         image = np.zeros((20, 30, 3), dtype=np.uint8)

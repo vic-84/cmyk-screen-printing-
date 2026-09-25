@@ -62,8 +62,9 @@ class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
     ROW_HEIGHT = 30
 
     def __init__(self, color_for_channel, angle_for_channel=None, parent=None, name_for_channel=None,
-                 density_for_channel=None):
+                 density_for_channel=None, own_tone_for_channel=None):
         super().__init__(parent)
+        self._own_tone_for_channel = own_tone_for_channel or (lambda ch: False)
         self._density_for_channel = density_for_channel or (lambda ch: 100.0)
         self._color_for_channel = color_for_channel
         self._name_for_channel = name_for_channel or (lambda ch: CHANNEL_NAMES.get(ch, ch))
@@ -103,6 +104,11 @@ class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
             painter.drawText(text_rect, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight, f"{angle:g}°")
         # Densidad cambiada: se avisa en la lista (una tinta al 0 % no se imprime)
         density = self._density_for_channel(channel)
+        own_tone = self._own_tone_for_channel(channel)
+        if own_tone and density == 100:
+            painter.setPen(QtGui.QColor(theme.EMULSION))
+            painter.drawText(text_rect.adjusted(0, 0, -52, 0), QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight,
+                             "tono propio")
         if density != 100:
             painter.setPen(QtGui.QColor(theme.ESTADO_RIESGO if density == 0 else theme.ESTADO_ALERTA))
             painter.drawText(text_rect.adjusted(0, 0, -52, 0), QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight,
@@ -1080,7 +1086,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 self.channel_angle_for_list,
                 self.channel_list,
                 self.channel_display_name,
-                lambda ch: self.density_spins[ch].value() if ch in self.density_spins else 100.0))
+                lambda ch: self.density_spins[ch].value() if ch in self.density_spins else 100.0,
+                lambda ch: ch in self.current_channel_tone()))
         self.channel_list.orderChanged.connect(self.set_channel_order)
         self.channel_list.itemSelectionChanged.connect(self.on_channel_selection_changed)
         self.channel_list.setFixedHeight(ChannelScreenDelegate.ROW_HEIGHT * 5 + 4)
@@ -1158,6 +1165,62 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             adjust_layout.addWidget(angle, i, 2)
             self.density_spins[ch], self.angle_spins[ch] = density, angle
         channels_tabs.addTab(adjust_tab, "Densidad y ángulo")
+
+        # Tono por canal: cada tinta gana distinto (la base de plastisol crece más
+        # que un cian de proceso). «General» = usa el valor del grupo Tono.
+        tone_tab = QtWidgets.QWidget()
+        tone_grid = QtWidgets.QGridLayout(tone_tab)
+        tone_grid.setContentsMargins(8, 8, 8, 8)
+        tone_grid.setHorizontalSpacing(6)
+        tone_grid.setVerticalSpacing(6)
+        for col, text in enumerate(("Canal", "Mín.", "Máx.", "Ganancia", "")):
+            tone_grid.addWidget(field_label(text), 0, col)
+        self.channel_tone_spins = {}
+        self.channel_curves = {}
+        self.channel_curve_buttons = {}
+
+        def general_spin(maximum, tooltip):
+            spin = QtWidgets.QDoubleSpinBox()
+            spin.setRange(-1, maximum)
+            spin.setDecimals(0)
+            spin.setSuffix(" %")
+            spin.setSpecialValueText("General")
+            spin.setValue(-1)
+            # Que la tabla quepa en el panel: las casillas se reparten el ancho
+            spin.setMinimumWidth(60)
+            spin.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Fixed)
+            spin.setButtonSymbols(QtWidgets.QAbstractSpinBox.NoButtons)
+            spin.setAlignment(QtCore.Qt.AlignCenter)
+            spin.setStyleSheet("QDoubleSpinBox { padding: 2px 2px; }")
+            spin.setToolTip(tooltip + "\n«General» usa el valor del grupo Tono.")
+            spin.valueChanged.connect(self.on_channel_tone_changed)
+            return spin
+
+        for col in (1, 2, 3):
+            tone_grid.setColumnStretch(col, 1)
+        for i, ch in enumerate(['C', 'M', 'Y', 'K', 'W'], 1):
+            tone_grid.addWidget(QtWidgets.QLabel("Base" if ch == 'W' else CHANNEL_NAMES[ch]), i, 0)
+            spins = {
+                'min_dot': general_spin(50, "Punto mínimo de esta tinta"),
+                'max_dot': general_spin(100, "Punto máximo de esta tinta"),
+                'dot_gain': general_spin(45, "Ganancia al 50 % medida con esta tinta"),
+            }
+            for col, key in enumerate(('min_dot', 'max_dot', 'dot_gain'), 1):
+                tone_grid.addWidget(spins[key], i, col)
+            curve_btn = QtWidgets.QPushButton("Curva")
+            curve_btn.setFixedWidth(64)
+            curve_btn.setStyleSheet("QPushButton { padding: 2px 4px; }")
+            curve_btn.setToolTip("Curva de ganancia medida con esta tinta (reemplaza la ganancia)")
+            curve_btn.clicked.connect(lambda _, c=ch: self.edit_gain_curve(c))
+            tone_grid.addWidget(curve_btn, i, 4)
+            self.channel_tone_spins[ch] = spins
+            self.channel_curves[ch] = []
+            self.channel_curve_buttons[ch] = curve_btn
+        tone_hint = secondary_label("Calibra cada tinta con la plantilla de ganancia estampada con esa tinta. "
+                                    "Los canales en «General» usan los valores del grupo Tono.")
+        tone_grid.addWidget(tone_hint, 6, 0, 1, 5)
+        tone_grid.setRowStretch(7, 1)
+        channels_tabs.addTab(tone_tab, "Tono por canal")
         channels_layout.addWidget(channels_tabs)
         controls_layout.addWidget(channels_group)
         controls_layout.addStretch()
@@ -2174,6 +2237,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             max_dot=self.max_dot_spin.value(),
             dot_gain=self.dot_gain_spin.value(),
             dot_gain_curve=[list(point) for point in self.dot_gain_curve],
+            channel_tone=self.current_channel_tone(),
             dpi=int(self.output_dpi_combo.currentData() or print_format["dpi_recommended"]),
             output_format=self.output_format_combo.currentData(),
             mirror=self.mirror_cb.isChecked(),
@@ -2243,6 +2307,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.max_dot_spin.setValue(settings.max_dot)
         self.dot_gain_spin.setValue(settings.dot_gain)
         self.set_gain_curve(settings.dot_gain_curve)
+        for ch, spins in self.channel_tone_spins.items():
+            own = settings.channel_tone.get(ch, {})
+            for key, spin in spins.items():
+                spin.blockSignals(True)
+                spin.setValue(own.get(key, -1))
+                spin.blockSignals(False)
+            self.set_gain_curve(own.get('dot_gain_curve', []), ch)
         dpi_index = self.output_dpi_combo.findData(settings.dpi)
         self.output_dpi_combo.setCurrentIndex(max(dpi_index, 0))
         self.output_format_combo.setCurrentIndex(max(self.output_format_combo.findData(settings.output_format), 0))
@@ -2554,24 +2625,50 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
     GAIN_CURVE_TONES = (10, 20, 30, 40, 50, 60, 70, 80, 90)
 
-    def set_gain_curve(self, curve):
-        self.dot_gain_curve = [list(point) for point in curve]
-        active = bool(self.dot_gain_curve)
-        self.dot_gain_spin.setEnabled(not active)
-        self.gain_curve_btn.setText(f"Curva ({len(self.dot_gain_curve)} pts)" if active else "Curva medida…")
+    def set_gain_curve(self, curve, channel=None):
+        """Curva medida general (channel=None) o de una tinta."""
+        curve = [list(point) for point in curve]
+        if channel is None:
+            self.dot_gain_curve = curve
+            self.dot_gain_spin.setEnabled(not curve)
+            self.gain_curve_btn.setText(f"Curva ({len(curve)} pts)" if curve else "Curva medida…")
+        else:
+            self.channel_curves[channel] = curve
+            self.channel_tone_spins[channel]['dot_gain'].setEnabled(not curve)
+            self.channel_curve_buttons[channel].setText(f"{len(curve)} pts" if curve else "Curva")
         self.schedule_rescreen()
 
-    def edit_gain_curve(self):
-        """Tabla para anotar el % impreso medido de cada % de película."""
+    def current_channel_tone(self):
+        """Ajustes propios de cada canal (solo los que no están en «General»)."""
+        tone = {}
+        for ch, spins in self.channel_tone_spins.items():
+            own = {key: spin.value() for key, spin in spins.items() if spin.value() >= 0}
+            if self.channel_curves.get(ch):
+                own['dot_gain_curve'] = [list(point) for point in self.channel_curves[ch]]
+                own.pop('dot_gain', None)
+            if own:
+                tone[ch] = own
+        return tone
+
+    def on_channel_tone_changed(self, *_):
+        self.channel_list.viewport().update()
+        self.schedule_rescreen()
+
+    def edit_gain_curve(self, channel=None):
+        """Tabla para anotar el % impreso medido de cada % de película (general o de una tinta)."""
         dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Curva de ganancia medida")
+        name = CHANNEL_NAMES.get(channel, channel) if channel else None
+        dialog.setWindowTitle(f"Curva de ganancia: {name}" if name else "Curva de ganancia medida")
         layout = QtWidgets.QVBoxLayout(dialog)
         intro = QtWidgets.QLabel("Anota el porcentaje que imprimió cada parche de la plantilla, "
-                                 "en la fila de tu lineatura. Deja 0 en los que no mediste.")
+                                 "en la fila de tu lineatura"
+                                 + (f", estampada con la tinta {name.lower()}" if name else "")
+                                 + ". Deja 0 en los que no mediste.")
         intro.setWordWrap(True)
         layout.addWidget(intro)
         form = QtWidgets.QFormLayout()
-        current = {round(f): p for f, p in self.dot_gain_curve}
+        existing = self.channel_curves.get(channel, []) if channel else self.dot_gain_curve
+        current = {round(f): p for f, p in existing}
         spins = {}
         for tone_value in self.GAIN_CURVE_TONES:
             spin = QtWidgets.QDoubleSpinBox()
@@ -2589,7 +2686,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         clear_btn.clicked.connect(lambda: [spin.setValue(0) for spin in spins.values()])
         layout.addWidget(buttons)
         if dialog.exec_() == QtWidgets.QDialog.Accepted:
-            self.set_gain_curve([[t, spin.value()] for t, spin in spins.items() if spin.value() > 0])
+            self.set_gain_curve([[t, spin.value()] for t, spin in spins.items() if spin.value() > 0], channel)
 
     def print_positives(self):
         """
@@ -2754,8 +2851,14 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             f.write(f"  Color de prenda: {self.garment_color.name()}\n")
             f.write("\nORDEN DE IMPRESIÓN\n")
             for i, channel in enumerate(settings.channels(), 1):
+                tone = settings.tone_for(channel)
+                gain = (f"curva de {len(tone['dot_gain_curve'])} puntos" if tone['dot_gain_curve']
+                        else f"ganancia {tone['dot_gain']:g} %")
+                own = " (propios)" if channel in settings.channel_tone else ""
                 f.write(f"  {i}. {settings.channel_name(channel)}: ángulo "
-                        f"{settings.channel_angle(channel):g}°, umbral {settings.thresholds.get(channel, 128)}\n")
+                        f"{settings.channel_angle(channel):g}°, umbral {settings.thresholds.get(channel, 128)}, "
+                        f"densidad {settings.density.get(channel, 100):g} %, punto {tone['min_dot']:g}–"
+                        f"{tone['max_dot']:g} %, {gain}{own}\n")
             f.write("\nARCHIVOS\n")
             for name in saved_files:
                 f.write(f"  {name}\n")

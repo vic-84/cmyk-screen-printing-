@@ -38,6 +38,10 @@ class JobSettings:
     max_dot: float = 100.0
     dot_gain: float = 0.0                # ganancia medida a 50 %, en puntos
     dot_gain_curve: list = field(default_factory=list)  # [[película %, impreso %], ...]
+    # Ajustes de tono de un canal que reemplazan a los generales (cada tinta gana
+    # distinto: la base de plastisol crece más que un cian de proceso).
+    # {'W': {'min_dot': 15, 'max_dot': 85, 'dot_gain': 30, 'dot_gain_curve': [[50, 80]]}}
+    channel_tone: dict = field(default_factory=dict)
 
     # Salida
     dpi: int = 300
@@ -139,6 +143,13 @@ class JobSettings:
         # quedaría de 1 px sin aviso
         limit = min(self.paper_px) // 4
         return min(round(self.guide_margin_mm / 25.4 * self.dpi), limit)
+
+    TONE_KEYS = ('min_dot', 'max_dot', 'dot_gain', 'dot_gain_curve')
+
+    def tone_for(self, channel):
+        """Mínimo, máximo, ganancia y curva del canal: los suyos si los tiene, si no los generales."""
+        own = self.channel_tone.get(channel, {})
+        return {key: own[key] if key in own else getattr(self, key) for key in self.TONE_KEYS}
 
     def ink_channels(self):
         """Canales de tinta de la técnica actual (sin base blanca)."""

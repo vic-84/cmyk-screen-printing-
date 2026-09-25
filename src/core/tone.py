@@ -1,5 +1,6 @@
 """
-Curva de tono por canal, aplicada al canal continuo antes de tramar:
+Curva de tono por canal, aplicada al canal continuo antes de tramar
+(mínimo, máximo y ganancia: los del canal si los tiene, si no los generales):
 
   densidad → umbral → compensación de ganancia de punto → rango tonal
 
@@ -53,8 +54,11 @@ class GainModel:
             self.curve = (film, np.clip(printed, 0.0, 1.0))
 
     @classmethod
-    def from_settings(cls, settings):
-        return cls(settings.dot_gain, settings.dot_gain_curve)
+    def from_settings(cls, settings, channel=None):
+        """Ganancia del canal (la suya si la tiene) o la general del trabajo."""
+        tone = settings.tone_for(channel) if channel else {'dot_gain': settings.dot_gain,
+                                                          'dot_gain_curve': settings.dot_gain_curve}
+        return cls(tone['dot_gain'], tone['dot_gain_curve'])
 
     @property
     def active(self):
@@ -96,8 +100,9 @@ def tone_lut(density=100.0, gain=None, min_dot=0.0, max_dot=100.0):
 def apply_tone(channel, name, settings):
     """Aplica umbral y curva de tono del trabajo a un canal continuo."""
     adjusted = adjust_levels(channel, settings.thresholds.get(name, 128))
-    lut = tone_lut(settings.density.get(name, 100.0), GainModel.from_settings(settings),
-                   settings.min_dot, settings.max_dot)
+    tone = settings.tone_for(name)
+    lut = tone_lut(settings.density.get(name, 100.0), GainModel.from_settings(settings, name),
+                   tone['min_dot'], tone['max_dot'])
     return lut[adjusted]
 
 

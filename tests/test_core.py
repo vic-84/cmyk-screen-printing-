@@ -848,6 +848,44 @@ class CoreTests(unittest.TestCase):
         self.assertIn("densidad 0 %", window.status_bar.currentMessage())
         window.close()
 
+    # ---------------------------------------------------------------- tono por canal
+
+    def test_channel_tone_overrides_only_that_channel(self):
+        settings = JobSettings(min_dot=10, max_dot=90, dot_gain=20,
+                               channel_tone={"W": {"min_dot": 20, "dot_gain": 35}})
+        self.assertEqual(settings.tone_for("W"), {"min_dot": 20, "max_dot": 90, "dot_gain": 35, "dot_gain_curve": []})
+        self.assertEqual(settings.tone_for("C")["dot_gain"], 20)
+        ramp = np.tile(np.arange(256, dtype=np.uint8), (4, 1))
+        from src.core.tone import apply_tone
+        general = JobSettings(min_dot=10, max_dot=90, dot_gain=20)
+        # El cian no cambia; la base pierde los puntos < 20 % y compensa más ganancia
+        np.testing.assert_array_equal(apply_tone(ramp, "C", settings), apply_tone(ramp, "C", general))
+        white = apply_tone(ramp, "W", settings)[0]
+        self.assertEqual(white[int(0.15 * 255)], 0)
+        self.assertLess(white[128], apply_tone(ramp, "W", general)[0][128])
+
+    def test_channel_curve_replaces_that_channel_gain(self):
+        from src.core.tone import GainModel
+        settings = JobSettings(dot_gain=20, channel_tone={"K": {"dot_gain_curve": [[50, 80]]}})
+        self.assertAlmostEqual(float(GainModel.from_settings(settings, "K").printed(0.5)), 0.8)
+        self.assertAlmostEqual(float(GainModel.from_settings(settings, "C").printed(0.5)), 0.7, places=2)
+
+    def test_channel_tone_round_trips_through_the_ui_and_json(self):
+        window = SimpleHalftoneApp()
+        window.channel_tone_spins["W"]["min_dot"].setValue(18)
+        window.channel_tone_spins["W"]["dot_gain"].setValue(32)
+        window.set_gain_curve([[50, 78]], "K")
+        settings = window.job_settings()
+        self.assertEqual(settings.channel_tone, {"W": {"min_dot": 18, "dot_gain": 32},
+                                                 "K": {"dot_gain_curve": [[50, 78]]}})
+        loaded = JobSettings.from_dict(json.loads(json.dumps(settings.to_dict())))
+        other = SimpleHalftoneApp()
+        other.apply_job_settings(loaded)
+        self.assertEqual(other.job_settings().channel_tone, settings.channel_tone)
+        self.assertFalse(other.channel_tone_spins["K"]["dot_gain"].isEnabled())
+        window.close()
+        other.close()
+
     def test_gray_base_is_named_and_simulated_with_its_color(self):
         red = [220, 30, 30]
         spots = [{"id": "S1", "name": "Rojo", "rgb": red, "halftone": False, "opaque": False, "base": True}]

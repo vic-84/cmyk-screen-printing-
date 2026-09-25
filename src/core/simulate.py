@@ -78,10 +78,10 @@ def simulate(channels, screens, settings, ink_rgb, garment_rgb, scale=1.0, show_
     canvas = np.empty((h, w, 3), dtype=np.float32)
     canvas[:] = np.asarray(garment_rgb, dtype=np.float32) / 255.0
 
-    gain = GainModel.from_settings(settings)
     offset_px = misregister_mm / 25.4 * settings.dpi * scale
     moving = 0
     for channel in order:
+        gain = GainModel.from_settings(settings, channel)
         if show_screen:
             ink = printed_ink(screens[channel], gain, settings.cell_px * scale)
         else:

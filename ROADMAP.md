@@ -244,3 +244,10 @@ Algunas marcas exigen separar con su perfil ICC. `src/core/icc.py`, sobre Little
   - datos del canal y tira de control con 1 mm de separación, en horizontal o en vertical si no caben;
   - nunca se dibuja sobre el diseño: lo que no tiene lugar se avisa en el estado, en la exportación, en la web (`guides_missing`) y en el CLI (`guias_sin_lugar`).
 - La vista previa muestra dónde caerán las cruces, los datos y la tira.
+
+## Tono por canal
+
+- Cada canal (C, M, Y, K y base) puede tener su propio punto mínimo, punto máximo, ganancia al 50 % o curva de ganancia medida.
+- Lo que queda en «General» usa los valores del grupo Tono.
+- Se guarda en `JobSettings.channel_tone` y `tone_for(canal)` resuelve los valores. Lo usan la trama, la simulación, el control de calidad y el CLI, que lee el JSON.
+- La lista de canales marca «tono propio» y las especificaciones anotan el tono de cada película.

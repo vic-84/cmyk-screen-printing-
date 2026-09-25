@@ -14,6 +14,7 @@ import os
 import sys
 import time
 
+from .core import icc
 from .core import input as doc_input
 from .core import output
 from .core.color import detect_palette
@@ -48,7 +49,7 @@ def auto_palette(document, settings, count):
 def process_file(path, settings, out_dir, colors=6):
     """Separa un archivo y guarda sus positivos. Devuelve el resumen del trabajo."""
     started = time.time()
-    document = doc_input.load_document(path, settings.dpi)
+    document = doc_input.load_document(path, settings.dpi, 0, settings.input_profile)
     job = JobSettings.from_dict(settings.to_dict())
     if job.mode in ('spot', 'index') and not job.spot_colors:
         auto_palette(document, job, colors)
@@ -76,6 +77,8 @@ def process_file(path, settings, out_dir, colors=6):
         'lpi': job.lpi, 'dpi': job.dpi,
         'tinta_total_max': round(report['tac_max'], 1),
         'puntos_que_se_pierden': round(report['lost'], 4),
+        'perfil_icc': job.icc_profile or 'fórmula GCR',
+        'perfil_icc_md5': icc.read_profile_info(icc.find_profile(job.icc_profile)).md5 if job.icc_profile else None,
         'notas': document.notes,
         'segundos': round(time.time() - started, 1),
     }
@@ -94,6 +97,10 @@ def main(argv=None):
     args = parser.parse_args(argv)
 
     settings = JobSettings.load(args.config)
+    if settings.icc_profile and not icc.find_profile(settings.icc_profile):
+        print(f"ERROR  El trabajo usa el perfil ICC «{settings.icc_profile}», que no está instalado "
+              f"(cópialo en {icc.user_profiles_dir()}).", file=sys.stderr)
+        return 2
     os.makedirs(args.output, exist_ok=True)
     results, failures = [], 0
     for path in iter_inputs(args.inputs):

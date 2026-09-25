@@ -54,6 +54,12 @@ class JobSettings:
 
     # Separación
     gcr: float = GCR_AMOUNT
+    # Gestión de color: con un perfil CMYK la separación la hace el perfil (GCR y TAC incluidos)
+    icc_profile: str = ''                # nombre del perfil CMYK de salida; '' = fórmula GCR
+    icc_intent: str = 'Colorimétrico relativo'
+    icc_bpc: bool = True                 # compensación de punto negro
+    icc_ink_limit: bool = False          # aplicar además el límite de tinta de la app
+    input_profile: str = 'sRGB'          # perfil asumido para imágenes RGB sin perfil
     ink_type: str = "Plastisol de proceso"
     substrate: str = "Personalizado"
     ink_limit: float = TOTAL_INK_LIMIT   # %

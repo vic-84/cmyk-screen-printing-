@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from .image_processing import enhance_image_resolution, generate_white_base, resize_to_print_format
+from . import icc
 from .screening import BAND_ROWS, screen_channel
 from .spot import separate_index, separate_spot, spot_masks_for_cmyk
 
@@ -78,6 +79,26 @@ def separate_cmyk(bgr, gcr, ink_limit):
     return channels
 
 
+def limit_total_ink(channels, ink_limit):
+    """Reduce C, M, Y donde C+M+Y+K supera el límite (K se conserva)."""
+    k = channels['K'].astype(np.float32) / 255.0
+    cmy = np.dstack([channels[c] for c in 'CMY']).astype(np.float32) / 255.0
+    reduction = np.clip((ink_limit / 100.0 - k) / np.maximum(cmy.sum(axis=2), 1e-6), 0.0, 1.0)
+    for i, name in enumerate('CMY'):
+        channels[name] = np.round(cmy[..., i] * reduction * 255).astype(np.uint8)
+    return channels
+
+
+def process_channels(bgr, settings):
+    """C, M, Y, K con el perfil ICC de salida si hay uno; si no, con la fórmula GCR."""
+    if settings.icc_profile:
+        channels = icc.rgb_to_profile_cmyk(bgr, settings.icc_profile, settings.icc_intent, settings.icc_bpc)
+        if settings.icc_ink_limit:
+            channels = limit_total_ink(channels, settings.ink_limit)
+        return channels
+    return separate_cmyk(bgr, settings.gcr, settings.ink_limit)
+
+
 def separate_channels(bgr, alpha, settings, scale=1.0):
     """Canales de tinta continuos (sin tramar) para la imagen preparada."""
     if settings.mode == 'spot':
@@ -86,21 +107,21 @@ def separate_channels(bgr, alpha, settings, scale=1.0):
         return separate_index(bgr, alpha, settings, scale)
     if settings.mode == 'cmyk_spot':
         spot_channels, knockout = spot_masks_for_cmyk(bgr, alpha, settings)
-        channels = separate_cmyk(bgr, settings.gcr, settings.ink_limit)
+        channels = process_channels(bgr, settings)
         keep = 1.0 - knockout
         for name in 'CMYK':
             channels[name] = np.round(channels[name] * keep).astype(np.uint8)
         channels.update(spot_channels)
-        if settings.white_base:
-            channels['W'] = generate_white_base(
-                bgr, settings.white_base_threshold, int(round(settings.white_base_choke_px * scale)), alpha)
-        return channels
-    if settings.mode == 'mono':
+    elif settings.mode == 'mono':
         # Semitono de una tinta: la cantidad de tinta sigue la oscuridad de la imagen
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         channels = {'K': 255 - gray}
     else:
-        channels = separate_cmyk(bgr, settings.gcr, settings.ink_limit)
+        channels = process_channels(bgr, settings)
+    if alpha is not None:
+        # Fuera del diseño (transparente) no va tinta
+        for name in list(channels):
+            channels[name] = np.round(channels[name] * (alpha.astype(np.float32) / 255.0)).astype(np.uint8)
     if settings.white_base:
         channels['W'] = generate_white_base(
             bgr, settings.white_base_threshold,

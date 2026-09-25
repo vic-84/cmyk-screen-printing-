@@ -36,6 +36,7 @@ from ..core.screening import screen_channel
 from ..core.separation import render
 from ..core import mesh as mesh_rules
 from ..core import output
+from ..core import icc
 from ..core import input as doc_input
 from ..core import simulate as sim
 from ..core.simulate import INK_TYPES, SUBSTRATE_PROFILES
@@ -832,6 +833,46 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         substrate_layout.addWidget(self.ink_limit_spin, 2, 1)
         controls_layout.addWidget(substrate_group)
 
+        # === GESTIÓN DE COLOR ===
+        color_group = QtWidgets.QGroupBox("Gestión de color")
+        color_layout = QtWidgets.QGridLayout(color_group)
+        color_layout.setHorizontalSpacing(10)
+        color_layout.setVerticalSpacing(6)
+        color_layout.setColumnStretch(1, 1)
+        color_layout.addWidget(field_label("Separación CMYK"), 0, 0)
+        self.icc_profile_combo = compact_combo(QtWidgets.QComboBox())
+        self.icc_profile_combo.setToolTip("Con un perfil ICC la separación la define el perfil (GCR y tinta total). "
+                                          "Úsalo cuando la marca o el cliente exija su perfil")
+        color_layout.addWidget(self.icc_profile_combo, 0, 1, 1, 2)
+        color_layout.addWidget(field_label("Intento"), 1, 0)
+        self.icc_intent_combo = compact_combo(QtWidgets.QComboBox())
+        self.icc_intent_combo.addItems(list(icc.INTENTS.keys()))
+        self.icc_intent_combo.setToolTip("Colorimétrico relativo: colores exactos dentro de gama (lo habitual para marcas). "
+                                         "Perceptual: comprime toda la imagen para conservar degradados")
+        color_layout.addWidget(self.icc_intent_combo, 1, 1, 1, 2)
+        color_layout.addWidget(field_label("Imágenes sin perfil"), 2, 0)
+        self.input_profile_combo = compact_combo(QtWidgets.QComboBox())
+        self.input_profile_combo.setToolTip("Perfil RGB que se asume cuando la imagen no trae uno incrustado")
+        color_layout.addWidget(self.input_profile_combo, 2, 1, 1, 2)
+        self.icc_bpc_cb = QtWidgets.QCheckBox("Compensar punto negro")
+        self.icc_bpc_cb.setChecked(True)
+        self.icc_limit_cb = QtWidgets.QCheckBox("Aplicar también el límite de tinta")
+        self.icc_limit_cb.setToolTip("Recorta la tinta total del perfil al límite del sustrato. "
+                                     "Desactívalo si la marca exige el perfil sin modificar")
+        color_layout.addWidget(self.icc_bpc_cb, 3, 0, 1, 3)
+        color_layout.addWidget(self.icc_limit_cb, 4, 0, 1, 3)
+        profile_buttons = QtWidgets.QHBoxLayout()
+        import_profile_btn = QtWidgets.QPushButton("Importar perfil…")
+        import_profile_btn.clicked.connect(self.import_icc_profile)
+        manage_profiles_btn = QtWidgets.QPushButton("Perfiles instalados…")
+        manage_profiles_btn.clicked.connect(self.show_icc_profiles)
+        profile_buttons.addWidget(import_profile_btn)
+        profile_buttons.addWidget(manage_profiles_btn)
+        color_layout.addLayout(profile_buttons, 5, 0, 1, 3)
+        self.icc_info_label = secondary_label("")
+        color_layout.addWidget(self.icc_info_label, 6, 0, 1, 3)
+        controls_layout.addWidget(color_group)
+
         # === SALIDA ===
         format_group = QtWidgets.QGroupBox("Salida")
         format_layout = QtWidgets.QVBoxLayout(format_group)
@@ -920,6 +961,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         film_options.addWidget(self.control_strip_cb, 0, 0)
         film_options.addWidget(self.mirror_cb, 0, 1)
         film_options.addWidget(self.negative_cb, 1, 0)
+        self.cmyk_composite_cb = QtWidgets.QCheckBox("TIFF CMYK con perfil")
+        self.cmyk_composite_cb.setToolTip("Exporta además la separación compuesta en un TIFF CMYK con el perfil incrustado")
+        film_options.addWidget(self.cmyk_composite_cb, 1, 1)
         format_layout.addLayout(film_options)
         controls_layout.addWidget(format_group)
 
@@ -1068,6 +1112,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.view_mode_combo.addItem("Tinta total", "tac")
         self.view_mode_combo.addItem("Puntos en riesgo", "dots")
         self.view_mode_combo.addItem("Prueba de calce", "registration")
+        self.view_mode_combo.addItem("Prueba de color ICC", "proof")
         self.view_mode_combo.setToolTip("Tinta total: rojo = supera el límite. Puntos en riesgo: naranja se pierde, "
                                         "azul se cierra. Prueba de calce: corre cada tinta para ver dónde asoma la base")
         self.view_mode_combo.currentIndexChanged.connect(self.on_view_mode_changed)
@@ -1165,6 +1210,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.lpi_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.mesh_spin.valueChanged.connect(self.update_moire_analysis)
         self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
+        self.refresh_icc_profiles()
+        self.icc_profile_combo.currentIndexChanged.connect(self.on_icc_profile_changed)
+        for control in (self.icc_intent_combo,):
+            control.currentIndexChanged.connect(self.on_icc_profile_changed)
+        self.icc_bpc_cb.stateChanged.connect(self.on_icc_profile_changed)
+        self.icc_limit_cb.stateChanged.connect(self.schedule_reseparation)
+        self.input_profile_combo.currentIndexChanged.connect(self.on_input_profile_changed)
         self.lpi_combo.currentTextChanged.connect(lambda *_: self.update_resolution_advice())
         self.fit_format_cb.stateChanged.connect(lambda *_: self.update_resolution_advice())
         self.print_format_combo.currentIndexChanged.connect(lambda *_: self.update_resolution_advice())
@@ -1435,7 +1487,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         """
         QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
-            document = doc_input.load_document(file_path, dpi or self.job_settings().dpi, page)
+            document = doc_input.load_document(file_path, dpi or self.job_settings().dpi, page,
+                                               self.input_profile_combo.currentData())
         except Exception as e:
             QtWidgets.QApplication.restoreOverrideCursor()
             QtWidgets.QMessageBox.critical(self, "No se pudo abrir el archivo",
@@ -1496,6 +1549,108 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "Error de Carga", f"No se pudo encontrar el archivo de base de datos: {os.path.basename(e.filename)}\nAsegúrate de que la carpeta 'data' exista y contenga los archivos .json.")
         except json.JSONDecodeError as e:
             QtWidgets.QMessageBox.critical(self, "Error de Carga", f"Error de formato en el archivo JSON: {e}")
+
+    # ------------------------------------------------------------ gestión de color
+
+    def refresh_icc_profiles(self, select=None):
+        """Recarga la lista de perfiles instalados en los combos."""
+        current = select if select is not None else (self.icc_profile_combo.currentData() or '')
+        current_input = self.input_profile_combo.currentData() or icc.SRGB
+        profiles = icc.list_profiles()
+        for combo in (self.icc_profile_combo, self.input_profile_combo):
+            combo.blockSignals(True)
+            combo.clear()
+        self.icc_profile_combo.addItem("Fórmula de la app (GCR + límite de tinta)", "")
+        self.input_profile_combo.addItem("sRGB (estándar)", icc.SRGB)
+        for info in profiles:
+            if info.usable_for_separation:
+                self.icc_profile_combo.addItem(info.label(), info.name)
+            elif info.usable_as_input:
+                self.input_profile_combo.addItem(info.label(), info.name)
+        self.icc_profile_combo.setCurrentIndex(max(self.icc_profile_combo.findData(current), 0))
+        self.input_profile_combo.setCurrentIndex(max(self.input_profile_combo.findData(current_input), 0))
+        for combo in (self.icc_profile_combo, self.input_profile_combo):
+            combo.blockSignals(False)
+        self.update_icc_info()
+
+    def select_icc_profile(self, name):
+        index = self.icc_profile_combo.findData(name or "")
+        if index < 0 and name:
+            QtWidgets.QMessageBox.warning(
+                self, "Perfil no instalado",
+                f"El trabajo usa el perfil «{name}», que no está instalado en este equipo.\n\n"
+                "Impórtalo en Gestión de color → Importar perfil… para separar igual que el original.")
+            index = 0
+        self.icc_profile_combo.setCurrentIndex(max(index, 0))
+
+    def update_icc_info(self):
+        name = self.icc_profile_combo.currentData()
+        uses_formula = not name
+        self.icc_intent_combo.setEnabled(not uses_formula)
+        self.icc_bpc_cb.setEnabled(not uses_formula)
+        self.icc_limit_cb.setEnabled(not uses_formula)
+        if uses_formula:
+            self.icc_info_label.setText("Separación con fórmula: GCR 0.8 y el límite de tinta del sustrato.")
+            return
+        try:
+            info = icc.read_profile_info(icc.find_profile(name))
+            tac = icc.total_ink_limit(name, self.icc_intent_combo.currentText(), self.icc_bpc_cb.isChecked())
+            self.icc_info_label.setText(f"{info.description}: tinta total máxima del perfil {tac:.0f} %. "
+                                        f"MD5 {info.md5[:12]}…")
+        except (ValueError, TypeError) as e:
+            self.icc_info_label.setText(str(e))
+
+    def on_icc_profile_changed(self, *_):
+        self.update_icc_info()
+        self.schedule_reseparation()
+
+    def on_input_profile_changed(self, *_):
+        """El perfil de entrada cambia cómo se lee la imagen: se vuelve a abrir."""
+        if self.image_info and self.image_info.get('file_path') and os.path.isfile(self.image_info['file_path']):
+            self.load_image_file(self.image_info['file_path'], page=self.image_info.get('page', 1) - 1)
+            if self.preview_cache == {}:
+                self.process_cmyk()
+
+    def import_icc_profile(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Importar perfil ICC", "", "Perfiles ICC (*.icc *.icm)")
+        if not path:
+            return
+        try:
+            info = icc.import_profile(path)
+        except ValueError as e:
+            QtWidgets.QMessageBox.critical(self, "Perfil no válido", str(e))
+            return
+        self.refresh_icc_profiles(select=info.name if info.usable_for_separation else None)
+        kind = "separación CMYK" if info.usable_for_separation else "entrada RGB"
+        self.status_bar.showMessage(f"Perfil importado ({kind}): {info.description}", 10000)
+        if info.usable_for_separation:
+            self.on_icc_profile_changed()
+
+    def show_icc_profiles(self):
+        """Lista de perfiles instalados con su espacio, clase y MD5."""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Perfiles ICC instalados")
+        dialog.resize(760, 320)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        table = QtWidgets.QTableWidget(0, 5)
+        table.setHorizontalHeaderLabels(["Perfil", "Espacio", "Uso", "Versión", "MD5"])
+        table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        table.verticalHeader().setVisible(False)
+        for info in icc.list_profiles():
+            row = table.rowCount()
+            table.insertRow(row)
+            use = "Separación" if info.usable_for_separation else ("Entrada" if info.usable_as_input else "—")
+            for column, text in enumerate([info.label(), info.color_space, use, info.version, info.md5]):
+                item = QtWidgets.QTableWidgetItem(text)
+                item.setToolTip(info.path)
+                table.setItem(row, column, item)
+        layout.addWidget(table)
+        layout.addWidget(QtWidgets.QLabel(f"Perfiles importados en: {icc.user_profiles_dir()}"))
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.exec_()
 
     # ------------------------------------------------------------ color plano
 
@@ -2178,6 +2333,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             resolution_method=resolution.get("method"),
             white_base=self.white_base_cb.isChecked(),
             ink_limit=self.ink_limit_spin.value(),
+            icc_profile=self.icc_profile_combo.currentData() or '',
+            icc_intent=self.icc_intent_combo.currentText(),
+            icc_bpc=self.icc_bpc_cb.isChecked(),
+            icc_ink_limit=self.icc_limit_cb.isChecked(),
+            input_profile=self.input_profile_combo.currentData() or icc.SRGB,
             ink_type=self.ink_type_combo.currentText(),
             substrate=self.substrate_combo.currentText(),
             thresholds=dict(self.channel_thresholds),
@@ -2224,6 +2384,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.negative_cb.setChecked(settings.negative)
         self.control_strip_cb.setChecked(settings.control_strip)
         self.ink_limit_spin.setValue(settings.ink_limit)
+        self.select_icc_profile(settings.icc_profile)
+        self.icc_intent_combo.setCurrentText(settings.icc_intent)
+        self.icc_bpc_cb.setChecked(settings.icc_bpc)
+        self.icc_limit_cb.setChecked(settings.icc_ink_limit)
+        index = self.input_profile_combo.findData(settings.input_profile)
+        self.input_profile_combo.setCurrentIndex(max(index, 0))
         self.ink_type_combo.setCurrentText(settings.ink_type)
         self.substrate_combo.blockSignals(True)
         self.substrate_combo.setCurrentText(settings.substrate)
@@ -2396,7 +2562,14 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             opacity=INK_TYPES.get(self.ink_type_combo.currentText(), 0.25),
             steps=None if mode != 'print' else steps,
             misregister_mm=self.misregister_spin.value() if mode == 'registration' else 0.0)
-        if mode == 'tac':
+        if mode == 'proof':
+            if settings.icc_profile and all(ch in self.channel_arrays for ch in 'CMYK'):
+                image = icc.cmyk_to_srgb(self.channel_arrays, settings.icc_profile,
+                                         settings.icc_intent, settings.icc_bpc)
+            else:
+                image = printed
+                self.status_bar.showMessage("La prueba de color ICC necesita un perfil CMYK en Gestión de color.", 8000)
+        elif mode == 'tac':
             image = sim.tac_overlay(printed, self.channel_arrays, settings)
         elif mode == 'dots':
             image = sim.dot_risk_overlay(printed, self.channel_arrays, settings)
@@ -2966,6 +3139,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 output.save_pdf(os.path.join(folder_path, pdf_name), positives, settings.dpi)
                 saved_files.append(pdf_name)
 
+            if self.cmyk_composite_cb.isChecked() and settings.icc_profile and settings.mode in ('cmyk', 'cmyk_spot'):
+                channels_full, _, _ = render(self.image, self.image_alpha, settings, preview=False)
+                composite_name = f"compuesto_CMYK_{timestamp}.tif"
+                icc.save_cmyk_tiff(os.path.join(folder_path, composite_name), channels_full,
+                                   settings.icc_profile, settings.dpi)
+                saved_files.append(composite_name)
+
             config_name = f"configuracion_{timestamp}.json"
             settings.save(os.path.join(folder_path, config_name))
             saved_files.append(config_name)
@@ -3013,7 +3193,16 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             f.write(f"  Lineatura: {settings.lpi:g} LPI (celda {settings.cell_px:.2f} px)\n")
             f.write(f"  Forma de punto: {self.shape_combo.currentText()}\n")
             f.write("\nSEPARACIÓN\n")
-            f.write(f"  GCR: {settings.gcr:g}   Límite de tinta total: {settings.ink_limit:g} %\n")
+            if settings.icc_profile:
+                info = icc.read_profile_info(icc.find_profile(settings.icc_profile))
+                f.write(f"  Perfil ICC de salida: {info.description} ({info.name})\n")
+                f.write(f"  MD5 del perfil: {info.md5}\n")
+                f.write(f"  Intento: {settings.icc_intent}; compensación de punto negro: "
+                        f"{'sí' if settings.icc_bpc else 'no'}; límite de tinta de la app: "
+                        f"{f'{settings.ink_limit:g} %' if settings.icc_ink_limit else 'no (el del perfil)'}\n")
+            else:
+                f.write(f"  GCR: {settings.gcr:g}   Límite de tinta total: {settings.ink_limit:g} %\n")
+            f.write(f"  Perfil de entrada asumido: {settings.input_profile}\n")
             if settings.white_base:
                 f.write(f"  Base blanca proporcional, choke {settings.white_base_choke_px} px\n")
             f.write(f"  Color de prenda: {self.garment_color.name()}\n")

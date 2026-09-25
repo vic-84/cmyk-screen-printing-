@@ -68,6 +68,30 @@ class WebApiTests(unittest.TestCase):
             "settings": json.dumps({"mode": "spot", "garment_rgb": [255, 255, 255]})}).json()
         self.assertEqual(len(palette["spot_colors"]), 2)
 
+    def test_icc_profile_upload_separation_and_proof(self):
+        import os
+        import tempfile
+        from unittest import mock
+        from src.core import icc
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"SERIGRAFIA_PROFILES_DIR": folder}):
+            with open(icc.find_profile("GRACoL2006_Coated1v2.icc"), "rb") as f:
+                data = f.read()
+            installed = self.client.post("/api/profile", files={"file": ("Marca.icc", data, "application/octet-stream")})
+            self.assertEqual(installed.status_code, 200, installed.text)
+            self.assertAlmostEqual(installed.json()["profile"]["tac"], 320, delta=1)
+            rejected = self.client.post("/api/profile", files={"file": ("roto.icc", b"xx", "application/octet-stream")})
+            self.assertEqual(rejected.status_code, 422)
+
+            uploaded = self._upload()
+            settings = json.dumps({"icc_profile": "Marca.icc", "lpi": 30})
+            proof = self.client.post("/api/preview", data={"doc_id": uploaded["id"], "settings": settings, "view": "proof"})
+            self.assertEqual(proof.status_code, 200, proof.text)
+            exported = self.client.post("/api/export", data={"doc_id": uploaded["id"], "settings": settings})
+            with zipfile.ZipFile(io.BytesIO(exported.content)) as bundle:
+                config = json.loads(bundle.read("configuracion.json"))
+                self.assertIn("compuesto_CMYK.tif", bundle.namelist())
+        self.assertEqual(len(config["icc_profile_md5"]), 32)
+
     def test_errors_are_explained(self):
         response = self.client.post("/api/upload", files={"file": ("nota.txt", b"hola", "text/plain")})
         self.assertEqual(response.status_code, 415)

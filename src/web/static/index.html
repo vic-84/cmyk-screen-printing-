@@ -158,6 +158,20 @@
       </fieldset>
 
       <fieldset>
+        <legend>Gestión de color</legend>
+        <div class="row"><label for="iccProfile">Separación CMYK</label><select id="iccProfile" class="span2"
+          title="Con un perfil ICC la separación la define el perfil: úsalo cuando la marca exija su perfil"></select></div>
+        <div class="row"><label for="iccIntent">Intento</label><select id="iccIntent" class="span2"></select></div>
+        <div class="row"><label for="inputProfile">Imágenes sin perfil</label><select id="inputProfile" class="span2"></select></div>
+        <div class="checks">
+          <label><input type="checkbox" id="iccBpc" checked> Compensar punto negro</label>
+          <label><input type="checkbox" id="iccLimit"> Aplicar límite de tinta</label>
+        </div>
+        <div class="row"><label for="iccUpload">Importar perfil</label><input type="file" id="iccUpload" class="span2" accept=".icc,.icm"></div>
+        <p class="hint" id="iccInfo"></p>
+      </fieldset>
+
+      <fieldset>
         <legend>Salida</legend>
         <div class="row"><label for="paper">Papel</label><select id="paper" class="span2"></select></div>
         <div class="row"><label for="dpi">Resolución</label><select id="dpi" class="span2">
@@ -183,7 +197,8 @@
     <div class="toolbar">
       <label>Ver <select id="view">
         <option value="print">Impreso</option><option value="tac">Tinta total</option>
-        <option value="dots">Puntos en riesgo</option><option value="registration">Prueba de calce</option></select></label>
+        <option value="dots">Puntos en riesgo</option><option value="registration">Prueba de calce</option>
+        <option value="proof">Prueba de color ICC</option></select></label>
       <label id="misregBox" hidden>Descalce <input type="number" id="misreg" value="0.3" min="0.05" max="2" step="0.05"> mm</label>
       <label><input type="checkbox" id="actual"> Tamaño real (ver la trama)</label>
       <span class="hint" id="stepLabel"></span>
@@ -230,6 +245,8 @@ function currentSettings() {
     output_format: $("format").value, ink_limit: +$("inkLimit").value, ink_type: $("inkType").value,
     substrate: $("substrate").value, white_base: $("whiteBase").checked,
     garment_rgb: hexToRgb($("garment").value), spot_colors: state.spots,
+    icc_profile: $("iccProfile").value, icc_intent: $("iccIntent").value, icc_bpc: $("iccBpc").checked,
+    icc_ink_limit: $("iccLimit").checked, input_profile: $("inputProfile").value,
     trap_mm: +$("trap").value, spot_tolerance: +$("tolerance").value, index_resolution: +$("indexRes").value,
     channel_order: ["W", "Y", "C", "M", "K", ...state.spots.map(s => s.id)],
   };
@@ -333,7 +350,7 @@ function renderScreens(channels) {
 async function upload(file) {
   setStatus(`Subiendo ${file.name}…`);
   try {
-    const r = await (await api("/api/upload", { file, dpi: $("dpi").value })).json();
+    const r = await (await api("/api/upload", { file, dpi: $("dpi").value, input_profile: $("inputProfile").value })).json();
     state.docId = r.id; state.spots = []; state.steps = -1;
     $("thumb").src = "data:image/png;base64," + r.thumbnail; $("thumb").style.display = "block";
     const info = r.info;
@@ -373,6 +390,23 @@ function applySubstrate() {
   schedule();
 }
 
+function fillProfiles(profiles, selectSeparation) {
+  const current = selectSeparation ?? $("iccProfile").value, currentInput = $("inputProfile").value || "sRGB";
+  fillSelect($("iccProfile"), [["Fórmula de la app (GCR + límite de tinta)", ""],
+    ...profiles.filter(p => p.separation).map(p => [p.label, p.name])], current);
+  fillSelect($("inputProfile"), [["sRGB (estándar)", "sRGB"],
+    ...profiles.filter(p => p.input).map(p => [p.label, p.name])], currentInput);
+  describeProfile();
+}
+
+async function describeProfile() {
+  const name = $("iccProfile").value, uses = !!name;
+  for (const id of ["iccIntent", "iccBpc", "iccLimit"]) $(id).disabled = !uses;
+  if (!uses) { $("iccInfo").textContent = "Separación con fórmula: GCR 0.8 y el límite de tinta del sustrato."; return; }
+  const r = await (await fetch(`/api/profile-info?name=${encodeURIComponent(name)}&intent=${encodeURIComponent($("iccIntent").value)}&bpc=${$("iccBpc").checked}`)).json();
+  $("iccInfo").textContent = `${r.description}: tinta total máxima del perfil ${r.tac.toFixed(0)} %. MD5 ${r.md5.slice(0, 12)}…`;
+}
+
 async function init() {
   const o = state.options = await (await fetch("/api/options")).json();
   fillSelect($("mode"), Object.entries(o.modes), "cmyk");
@@ -381,6 +415,21 @@ async function init() {
   fillSelect($("substrate"), [["Personalizado", "Personalizado"], ...Object.keys(o.substrates).map(k => [k, k])]);
   fillSelect($("inkType"), Object.keys(o.ink_types).map(k => [k, k]));
   fillSelect($("paper"), Object.keys(o.papers).map(k => [k, k]), "A3");
+  fillSelect($("iccIntent"), o.intents.map(k => [k, k]));
+  fillProfiles(o.profiles, "");
+  $("iccProfile").onchange = $("iccIntent").onchange = $("iccBpc").onchange = () => { describeProfile(); schedule(); };
+  $("iccLimit").onchange = schedule;
+  $("inputProfile").onchange = () => { if ($("file").files[0]) upload($("file").files[0]); };
+  $("iccUpload").onchange = async () => {
+    const file = $("iccUpload").files[0];
+    if (!file) return;
+    try {
+      const r = await (await api("/api/profile", { file })).json();
+      fillProfiles(r.profiles, r.profile.separation ? r.profile.name : undefined);
+      setStatus(`Perfil instalado: ${r.profile.label} (${r.profile.space}).`);
+      schedule();
+    } catch (e) { setStatus(e.message, true); }
+  };
 
   const drop = $("drop");
   drop.onclick = () => $("file").click();

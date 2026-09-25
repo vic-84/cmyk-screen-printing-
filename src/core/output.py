@@ -3,6 +3,7 @@ Salida de positivos: colocación en el papel, guías de registro y archivos
 con la resolución incrustada.
 """
 
+import os
 import unicodedata
 
 import cv2
@@ -80,6 +81,9 @@ def add_registration_guides(screen, channel, settings):
     position = order.index(channel) + 1 if channel in order else 0
     label = (f"{position}/{len(order)} {settings.channel_name(channel)}  "
              f"{settings.lpi:g} LPI  ang {settings.channel_angle(channel):g}  {dpi} DPI")
+    if settings.icc_profile and settings.mode in ('cmyk', 'cmyk_spot'):
+        # Trazabilidad: perfil con el que se separó (lo exigen algunas marcas)
+        label += f"  ICC {os.path.splitext(settings.icc_profile)[0][:28]}"
     text_height = max(10, int(margin * 0.22))
     put_text(canvas, label, (margin, max(text_height + 4, margin // 2)), text_height, max(1, thickness // 2))
 

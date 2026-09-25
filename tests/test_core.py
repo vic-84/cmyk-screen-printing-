@@ -15,6 +15,7 @@ from src.core import mesh as mesh_rules
 from src.core import color, output, tone
 from src.core import simulate as sim
 from src.core import input as doc_input
+from src.core import icc
 from src.core.job import JobSettings
 from src.core.screening import adjust_levels, halftone
 from src.core.separation import render
@@ -625,6 +626,114 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(len(batch), 2)
         self.assertIn("POSITIVO_K.tif", produced)
         self.assertIn("configuracion.json", produced)
+
+    # ---------------------------------------------------------------- perfiles ICC
+
+    GRACOL = "GRACoL2006_Coated1v2.icc"
+
+    def test_bundled_profiles_are_valid_and_classified(self):
+        profiles = {info.name: info for info in icc.list_profiles()}
+        self.assertTrue(profiles[self.GRACOL].usable_for_separation)
+        self.assertTrue(profiles["AdobeRGB1998.icc"].usable_as_input)
+        self.assertEqual(len(profiles[self.GRACOL].md5), 32)
+
+    def test_icc_separation_follows_the_profile(self):
+        image = np.zeros((1, 3, 3), dtype=np.uint8)
+        image[0, 1] = (255, 255, 255)
+        image[0, 2] = (128, 128, 128)
+        settings = JobSettings(icc_profile=self.GRACOL)
+        channels, _, _ = render(image, None, settings)
+        black = [int(channels[c][0, 0]) for c in "CMYK"]
+        self.assertEqual(black[3], 255)
+        self.assertAlmostEqual(sum(black) / 2.55, icc.total_ink_limit(self.GRACOL), delta=1)
+        self.assertEqual([int(channels[c][0, 1]) for c in "CMYK"], [0, 0, 0, 0])
+        # Balance de grises de GRACoL: el gris neutro lleva más cian que magenta
+        self.assertGreater(channels["C"][0, 2], channels["M"][0, 2])
+
+    def test_icc_ink_limit_is_optional(self):
+        image = np.zeros((2, 2, 3), dtype=np.uint8)
+        strict = JobSettings(icc_profile=self.GRACOL, icc_ink_limit=False, ink_limit=260)
+        limited = JobSettings(icc_profile=self.GRACOL, icc_ink_limit=True, ink_limit=260)
+        total = lambda ch: sum(int(ch[c][0, 0]) for c in "CMYK") / 2.55
+        self.assertGreater(total(render(image, None, strict)[0]), 300)
+        self.assertLessEqual(total(render(image, None, limited)[0]), 260.5)
+
+    def test_icc_round_trip_keeps_in_gamut_colors(self):
+        rgb = np.array([[[90, 140, 60], [200, 120, 80], [70, 90, 160]]], dtype=np.uint8)
+        channels = icc.rgb_to_profile_cmyk(rgb[..., ::-1].copy(), self.GRACOL)
+        proof = icc.cmyk_to_srgb(channels, self.GRACOL)
+        difference = color.delta_e2000(color.rgb_to_lab(rgb.reshape(-1, 3)), color.rgb_to_lab(proof.reshape(-1, 3)))
+        self.assertLess(float(difference.max()), 3.0)
+
+    def test_intents_give_different_separations(self):
+        saturated = np.array([[[255, 0, 0]]], dtype=np.uint8)   # azul fuera de gama (BGR)
+        relative = icc.rgb_to_profile_cmyk(saturated, self.GRACOL, "Colorimétrico relativo")
+        perceptual = icc.rgb_to_profile_cmyk(saturated, self.GRACOL, "Perceptual")
+        self.assertNotEqual([int(relative[c][0, 0]) for c in "CMYK"], [int(perceptual[c][0, 0]) for c in "CMYK"])
+
+    def test_import_profile_validates_and_copies(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"SERIGRAFIA_PROFILES_DIR": folder}):
+            source = os.path.join(folder, "origen")
+            os.makedirs(source)
+            marca = os.path.join(source, "Marca_Textil.icc")
+            with open(icc.find_profile(self.GRACOL), "rb") as src, open(marca, "wb") as dst:
+                dst.write(src.read())
+            info = icc.import_profile(marca)
+            self.assertTrue(os.path.isfile(os.path.join(folder, "Marca_Textil.icc")))
+            self.assertIn("Marca_Textil.icc", [p.name for p in icc.list_profiles()])
+            bad = os.path.join(source, "roto.icc")
+            with open(bad, "wb") as f:
+                f.write(b"no es un perfil")
+            with self.assertRaises(ValueError):
+                icc.import_profile(bad)
+        self.assertTrue(info.usable_for_separation)
+
+    def test_untagged_image_uses_the_assumed_input_profile(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "sin_perfil.png")
+            Image.new("RGB", (4, 4), (0, 200, 0)).save(path)
+            as_srgb = doc_input.load_document(path)
+            as_adobe = doc_input.load_document(path, input_profile="AdobeRGB1998.icc")
+        self.assertNotEqual(tuple(as_srgb.bgr[0, 0]), tuple(as_adobe.bgr[0, 0]))
+        self.assertTrue(any("AdobeRGB1998" in note for note in as_adobe.notes))
+
+    def test_embedded_profile_is_respected(self):
+        from PIL import ImageCms
+        adobe = ImageCms.getOpenProfile(icc.find_profile("AdobeRGB1998.icc"))
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "adobe.jpg")
+            Image.new("RGB", (4, 4), (0, 200, 0)).save(path, icc_profile=adobe.tobytes(), quality=100)
+            document = doc_input.load_document(path)
+        self.assertTrue(any("Adobe RGB" in note for note in document.notes))
+
+    def test_cmyk_tiff_embeds_the_profile_and_films_are_labeled(self):
+        settings = JobSettings(icc_profile=self.GRACOL, registration_guides=True, fit_to_paper=True,
+                               paper_width_mm=80, paper_height_mm=60)
+        image = np.full((40, 50, 3), 120, dtype=np.uint8)
+        channels, screens, _ = render(image, None, settings)
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "compuesto.tif")
+            icc.save_cmyk_tiff(path, channels, settings.icc_profile, settings.dpi)
+            with Image.open(path) as im:
+                self.assertEqual(im.mode, "CMYK")
+                embedded = im.info.get("icc_profile")
+        self.assertIn("GRACoL", icc.embedded_description(embedded))
+        film = output.finish_positive(screens["C"], "C", settings)
+        self.assertGreater((film[:80] == 0).sum(), 0)
+
+    def test_icc_controls_in_the_window(self):
+        window = SimpleHalftoneApp()
+        index = window.icc_profile_combo.findData(self.GRACOL)
+        self.assertGreaterEqual(index, 0)
+        window.icc_profile_combo.setCurrentIndex(index)
+        self.assertIn("320 %", window.icc_info_label.text())
+        window._set_loaded_image(np.full((30, 30, 3), 90, dtype=np.uint8))
+        window.process_cmyk()
+        window.view_mode_combo.setCurrentIndex(window.view_mode_combo.findData("proof"))
+        settings = window.job_settings()
+        self.assertEqual(settings.icc_profile, self.GRACOL)
+        self.assertEqual(settings.icc_intent, "Colorimétrico relativo")
+        window.close()
 
     def test_rotate_image_preserves_color_images(self):
         image = np.zeros((20, 30, 3), dtype=np.uint8)

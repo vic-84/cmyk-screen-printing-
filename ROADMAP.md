@@ -157,6 +157,23 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
 - Verificada en Chromium: carga, CMYK sobre algodón negro, color plano y descarga del zip, sin errores en consola.
 - Pruebas: 56 (5 de la API web).
 
+### Gestión de color ICC *(agregada)*
+Algunas marcas exigen separar con su perfil ICC. `src/core/icc.py`, sobre LittleCMS 2.19:
+- **Separación CMYK con perfil**: sRGB → CMYK con el perfil de salida elegido. El GCR y la tinta total los define el perfil (GRACoL: negro C80 M72 Y68 K100 = 320 %). El límite de tinta de la app es **opcional** y está apagado por defecto, para respetar el perfil sin modificar.
+- **Intento de reproducción**: colorimétrico relativo (por defecto), perceptual, saturación o colorimétrico absoluto; compensación de punto negro opcional.
+- **Biblioteca de perfiles**: los incluidos (GRACoL 2006, Adobe RGB 1998) y los **importados** (.icc/.icm). Al importarlos se validan (tienen que ser RGB o CMYK) y se copian a la carpeta del usuario (`~/.serigrafia/perfiles`, o la de `SERIGRAFIA_PROFILES_DIR`). Hay una lista con espacio, uso, versión y MD5.
+- **Entrada**:
+  - se respeta el perfil incrustado en imágenes y PSD
+  - para imágenes sin perfil se elige el perfil asumido; así se usa Adobe RGB
+- **Prueba de color ICC** (vista): CMYK → sRGB con el mismo perfil. Ida y vuelta con ΔE2000 < 3 en colores dentro de gama (probado).
+- **Trazabilidad**:
+  - la etiqueta de cada película lleva el perfil
+  - las especificaciones registran perfil, **MD5**, intento, compensación de punto negro y límite
+  - la exportación puede incluir un **TIFF CMYK compuesto con el perfil incrustado**
+  - si un trabajo guardado usa un perfil que no está instalado, la app y el CLI lo avisan en vez de separar con otro
+- Disponible también en la versión web (instalar perfil, prueba ICC, TIFF compuesto en el zip) y en el CLI.
+- Pruebas: 67.
+
 ---
 
 ## Requisitos de sistema

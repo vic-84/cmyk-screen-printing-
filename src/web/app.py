@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..core import input as doc_input
 from ..core import mesh as mesh_rules
+from ..core import icc
 from ..core import output
 from ..core import simulate as sim
 from ..core.color import detect_palette, match_library, read_library
@@ -87,12 +88,49 @@ def _ink_colors(settings):
     return colors
 
 
+def _profiles():
+    return [{"name": p.name, "label": p.label(), "space": p.color_space, "md5": p.md5,
+             "separation": p.usable_for_separation, "input": p.usable_as_input}
+            for p in icc.list_profiles()]
+
+
+@app.post("/api/profile")
+async def upload_profile(file: UploadFile = File(...)):
+    """Instala un perfil ICC (por ejemplo, el que exige una marca) en la carpeta de perfiles."""
+    name = os.path.basename(file.filename or "")
+    if not name.lower().endswith(icc.ICC_EXTENSIONS):
+        raise HTTPException(415, "El perfil debe tener extensión .icc o .icm.")
+    with tempfile.TemporaryDirectory() as folder:
+        path = os.path.join(folder, name)
+        with open(path, "wb") as f:
+            f.write(await file.read())
+        try:
+            info = icc.import_profile(path)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+    tac = icc.total_ink_limit(info.name) if info.usable_for_separation else None
+    return {"profile": {"name": info.name, "label": info.label(), "space": info.color_space, "md5": info.md5,
+                        "separation": info.usable_for_separation, "input": info.usable_as_input,
+                        "tac": tac}, "profiles": _profiles()}
+
+
+@app.get("/api/profile-info")
+def profile_info(name: str, intent: str = icc.DEFAULT_INTENT, bpc: bool = True):
+    path = icc.find_profile(name)
+    if not path:
+        raise HTTPException(404, f"El perfil «{name}» no está instalado.")
+    info = icc.read_profile_info(path)
+    return {"description": info.description, "md5": info.md5, "space": info.color_space,
+            "tac": icc.total_ink_limit(name, intent, bpc) if info.usable_for_separation else None}
+
+
 @app.get("/api/options")
 def options():
     return {
         "modes": SEPARATION_MODES, "shapes": POINT_SHAPES, "angle_presets": ANGLE_PRESETS,
         "default_angles": CMYK_ANGLES, "lpi_options": LPI_OPTIONS, "papers": PAPER_FORMATS,
         "substrates": sim.SUBSTRATE_PROFILES, "ink_types": sim.INK_TYPES,
+        "profiles": _profiles(), "intents": list(icc.INTENTS.keys()),
         "defaults": JobSettings().to_dict(),
     }
 
@@ -107,7 +145,7 @@ def mesh(mesh_tpi: float, lpi: float):
 
 
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...), dpi: float = Form(300)):
+async def upload(file: UploadFile = File(...), dpi: float = Form(300), input_profile: str = Form("sRGB")):
     data = await file.read()
     if len(data) > MAX_UPLOAD_MB * 1024 * 1024:
         raise HTTPException(413, f"El archivo supera {MAX_UPLOAD_MB} MB.")
@@ -120,7 +158,7 @@ async def upload(file: UploadFile = File(...), dpi: float = Form(300)):
         with open(path, "wb") as f:
             f.write(data)
         try:
-            document = doc_input.load_document(path, dpi)
+            document = doc_input.load_document(path, dpi, 0, input_profile)
         except Exception as e:
             raise HTTPException(422, f"No se pudo abrir el archivo: {e}")
     document.path = file.filename
@@ -172,7 +210,11 @@ def preview(doc_id: str = Form(...), settings: str = Form("{}"), view: str = For
                            opacity=sim.INK_TYPES.get(job.ink_type, 0.25),
                            steps=None if steps < 0 or view != "print" else steps,
                            misregister_mm=misregister_mm if view == "registration" else 0.0)
-    if view == "tac":
+    if view == "proof":
+        if not job.icc_profile or not all(c in channels for c in "CMYK"):
+            raise HTTPException(400, "La prueba de color ICC necesita un perfil CMYK en Gestión de color.")
+        printed = icc.cmyk_to_srgb(channels, job.icc_profile, job.icc_intent, job.icc_bpc)
+    elif view == "tac":
         printed = sim.tac_overlay(printed, channels, job)
     elif view == "dots":
         printed = sim.dot_risk_overlay(printed, channels, job)
@@ -201,7 +243,16 @@ def export(doc_id: str = Form(...), settings: str = Form("{}")):
         pdf_path = os.path.join(folder, f"{base_name}_positivos.pdf")
         output.save_pdf(pdf_path, films, job.dpi)
         bundle.write(pdf_path, os.path.basename(pdf_path))
-        bundle.writestr("configuracion.json", json.dumps(job.to_dict(), indent=2, ensure_ascii=False))
+        config = job.to_dict()
+        if job.icc_profile and job.mode in ("cmyk", "cmyk_spot"):
+            info = icc.read_profile_info(icc.find_profile(job.icc_profile))
+            config["icc_profile_md5"] = info.md5
+            config["icc_profile_description"] = info.description
+            composite = os.path.join(folder, "compuesto_CMYK.tif")
+            channels_full, _, _ = render(document.bgr, document.alpha, job, preview=False)
+            icc.save_cmyk_tiff(composite, channels_full, job.icc_profile, job.dpi)
+            bundle.write(composite, "compuesto_CMYK.tif")
+        bundle.writestr("configuracion.json", json.dumps(config, indent=2, ensure_ascii=False))
     return Response(buffer.getvalue(), media_type="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{base_name}_positivos.zip"'})
 

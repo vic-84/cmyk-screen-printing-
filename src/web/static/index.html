@@ -136,6 +136,7 @@
           <tbody></tbody>
         </table>
         <div class="row"><label for="trap">Trapping</label><input type="number" id="trap" value="0" min="0" max="2" step="0.05"><span class="hint">mm</span></div>
+        <div class="row"><label for="despeckle">Limpiar motas</label><input type="number" id="despeckle" value="0.25" min="0" max="2" step="0.05"><span class="hint">mm</span></div>
         <div class="row"><label for="tolerance">Alcance del plano</label><input type="number" id="tolerance" value="10" min="2" max="40"><span class="hint">ΔE</span></div>
         <div class="row"><label for="indexRes">Resolución índice</label><input type="number" id="indexRes" value="150" min="50" max="400"><span class="hint">ppp</span></div>
         <div class="row"><label for="library">Biblioteca</label><input type="file" id="library" class="span2" accept=".ase,.csv,.txt" title="ASE o CSV (nombre,#RRGGBB)"></div>
@@ -247,7 +248,7 @@ function currentSettings() {
     garment_rgb: hexToRgb($("garment").value), spot_colors: state.spots,
     icc_profile: $("iccProfile").value, icc_intent: $("iccIntent").value, icc_bpc: $("iccBpc").checked,
     icc_ink_limit: $("iccLimit").checked, input_profile: $("inputProfile").value,
-    trap_mm: +$("trap").value, spot_tolerance: +$("tolerance").value, index_resolution: +$("indexRes").value,
+    trap_mm: +$("trap").value, despeckle_mm: +$("despeckle").value, spot_tolerance: +$("tolerance").value, index_resolution: +$("indexRes").value,
     channel_order: ["W", "Y", "C", "M", "K", ...state.spots.map(s => s.id)],
   };
 }
@@ -318,6 +319,12 @@ async function runPreview() {
     if ($("mode").value === "cmyk" || $("mode").value === "cmyk_spot") parts.push(`tinta total máx. ${rep.tac_max.toFixed(0)} %`);
     if (rep.lost > 0.005) parts.push(`${(rep.lost * 100).toFixed(1)} % con puntos < ${rep.hold_min.toFixed(0)} % que la malla no sostiene`);
     if (rep.plugged > 0.005) parts.push(`${(rep.plugged * 100).toFixed(1)} % con sombras que se cerrarán`);
+    const inkName = (id) => (r.channels.find(c => c.id === id) || { name: id }).name;
+    for (const [id, thin] of Object.entries(rep.thin || {})) {
+      if (thin.lines > 0.002) parts.push(`${(thin.lines * 100).toFixed(1)} % de ${inkName(id)} son líneas de menos de ${rep.min_line_mm.toFixed(2)} mm`);
+      if (thin.specks) parts.push(`${thin.specks} motas sueltas en ${inkName(id)} (sube «Limpiar motas»)`);
+      if (thin.gaps > 0.002) parts.push(`${inkName(id)} tiene huecos de menos de ${rep.min_line_mm.toFixed(2)} mm que se taparán`);
+    }
     parts.push(`vista previa al ${(r.scale * 100).toFixed(0)} %`);
     setStatus(parts.join("; ") + ". " + r.resolution.message);
   } catch (e) {
@@ -463,7 +470,7 @@ async function init() {
     } catch (e) { setStatus(e.message, true); }
   };
   for (const id of ["shape", "angles", "minDot", "maxDot", "gain", "garment", "inkType", "inkLimit", "whiteBase",
-                    "paper", "fit", "guides", "strip", "mirror", "negative", "trap", "tolerance", "indexRes", "misreg", "dpi"]) {
+                    "paper", "fit", "guides", "strip", "mirror", "negative", "trap", "despeckle", "tolerance", "indexRes", "misreg", "dpi"]) {
     $(id).addEventListener("change", schedule);
   }
   checkMesh();

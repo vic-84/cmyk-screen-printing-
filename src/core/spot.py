@@ -151,6 +151,13 @@ def separate_spot(bgr, alpha, settings, scale=1.0):
             amount = weights[i] if spot.get('halftone') else (band_nearest == i).astype(np.float32)
             amounts[i, top:bottom] = np.round(np.clip(amount * opacity, 0, 1) * 255).astype(np.uint8)
 
+    speck_px = settings.despeckle_mm / 25.4 * settings.dpi * scale
+    if speck_px >= 1:
+        for i, spot in enumerate(spots):
+            if not spot.get('halftone'):
+                removed = remove_specks(amounts[i], speck_px)
+                nearest[removed] = len(spots)   # la mota eliminada pasa a ser prenda
+
     trap_px = int(round(settings.trap_mm / 25.4 * settings.dpi * scale))
     if trap_px > 0:
         _apply_trapping(amounts, nearest, spots, trap_px)
@@ -166,6 +173,23 @@ def separate_spot(bgr, alpha, settings, scale=1.0):
             base = cv2.erode(base, kernel)
         channels['W'] = base
     return channels
+
+
+def remove_specks(channel, diameter_px):
+    """
+    Elimina en el lugar las manchas de tinta más chicas que un círculo de
+    diameter_px (ruido JPEG, píxeles sueltos del antialias). Esas motas no se
+    sostienen en la malla o se imprimen como suciedad. Devuelve la máscara
+    de lo eliminado.
+    """
+    min_area = max(1, int(np.pi / 4 * diameter_px ** 2))
+    ink = (channel >= 128).astype(np.uint8)
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+    small = np.zeros(count, dtype=bool)
+    small[1:] = stats[1:, cv2.CC_STAT_AREA] < min_area
+    removed = small[labels]
+    channel[removed] = 0
+    return removed
 
 
 def _apply_trapping(amounts, nearest, spots, trap_px):

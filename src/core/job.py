@@ -77,6 +77,7 @@ class JobSettings:
     trap_mm: float = 0.0
     spot_softness: float = 12.0          # ΔE: cuánto se reparte una tinta con semitono
     spot_angle: float = 22.5
+    despeckle_mm: float = 0.25           # tintas sólidas: se eliminan manchas menores (0 = no)
     spot_tolerance: float = 10.0         # ΔE: alcance de una tinta plana en CMYK + planos
     index_resolution: float = 150.0      # píxeles cuadrados por pulgada en color índice
     index_spread: float = 18.0           # ΔE: intensidad del tramado ordenado del índice

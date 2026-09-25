@@ -741,6 +741,16 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.spot_angle_spin.setSuffix(" °")
         spot_grid.addWidget(self.spot_angle_spin, 2, 1)
 
+        spot_grid.addWidget(field_label("Limpiar motas"), 5, 0)
+        self.despeckle_spin = QtWidgets.QDoubleSpinBox()
+        self.despeckle_spin.setRange(0, 2)
+        self.despeckle_spin.setSingleStep(0.05)
+        self.despeckle_spin.setDecimals(2)
+        self.despeckle_spin.setValue(0.25)
+        self.despeckle_spin.setSuffix(" mm")
+        self.despeckle_spin.setToolTip("Elimina manchas de tinta sólida más chicas que este diámetro "
+                                       "(ruido JPEG, píxeles sueltos). 0 = no limpiar")
+        spot_grid.addWidget(self.despeckle_spin, 5, 1)
         spot_grid.addWidget(field_label("Resolución índice"), 3, 0)
         self.index_resolution_spin = QtWidgets.QDoubleSpinBox()
         self.index_resolution_spin.setRange(50, 400)
@@ -1221,7 +1231,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.fit_format_cb.stateChanged.connect(lambda *_: self.update_resolution_advice())
         self.print_format_combo.currentIndexChanged.connect(lambda *_: self.update_resolution_advice())
         self.ink_limit_spin.valueChanged.connect(self.schedule_reseparation)
-        for control in (self.trap_spin, self.spot_softness_spin, self.spot_tolerance_spin, self.index_resolution_spin):
+        for control in (self.trap_spin, self.spot_softness_spin, self.spot_tolerance_spin, self.index_resolution_spin,
+                        self.despeckle_spin):
             control.valueChanged.connect(self.schedule_reseparation)
         self.spot_angle_spin.valueChanged.connect(self.schedule_rescreen)
         for control in (self.min_dot_spin, self.max_dot_spin, self.dot_gain_spin, *self.density_spins.values()):
@@ -2349,6 +2360,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             spot_softness=self.spot_softness_spin.value(),
             spot_angle=self.spot_angle_spin.value(),
             spot_tolerance=self.spot_tolerance_spin.value(),
+            despeckle_mm=self.despeckle_spin.value(),
             index_resolution=self.index_resolution_spin.value(),
         )
 
@@ -2400,6 +2412,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.spot_softness_spin.setValue(settings.spot_softness)
         self.spot_angle_spin.setValue(settings.spot_angle)
         self.spot_tolerance_spin.setValue(settings.spot_tolerance)
+        self.despeckle_spin.setValue(settings.despeckle_mm)
         self.index_resolution_spin.setValue(settings.index_resolution)
         self.set_spot_colors(settings.spot_colors)
         for ch, spin in self.density_spins.items():
@@ -2572,7 +2585,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         elif mode == 'tac':
             image = sim.tac_overlay(printed, self.channel_arrays, settings)
         elif mode == 'dots':
-            image = sim.dot_risk_overlay(printed, self.channel_arrays, settings)
+            image = sim.dot_risk_overlay(printed, self.channel_arrays, settings, self.preview_scale)
         else:
             image = printed
         image = np.ascontiguousarray(image)
@@ -2611,7 +2624,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
     def show_quality_summary(self, settings):
         """Resumen de control de calidad en la barra de estado tras separar."""
-        report = sim.quality_report(self.channel_arrays, settings)
+        report = sim.quality_report(self.channel_arrays, settings, self.preview_scale)
         parts = [f"{settings.lpi:g} LPI a {settings.dpi} DPI"]
         if settings.mode == 'cmyk':
             parts.append(f"tinta total máx. {report['tac_max']:.0f} %"
@@ -2620,6 +2633,16 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             parts.append(f"{report['lost']:.1%} con puntos < {report['hold_min']:.0f} % que la malla no sostiene")
         if report['plugged'] > 0.005:
             parts.append(f"{report['plugged']:.1%} con sombras > {report['hold_max']:.0f} % que se cerrarán")
+        for channel, thin in report['thin'].items():
+            if thin['lines'] > 0.002:
+                parts.append(f"{thin['lines']:.1%} de {self.channel_display_name(channel)} son líneas de menos de "
+                             f"{report['min_line_mm']:.2f} mm que la malla no sostiene")
+            if thin.get('specks'):
+                parts.append(f"{thin['specks']} motas sueltas en {self.channel_display_name(channel)} "
+                             f"(sube «Limpiar motas»)")
+            if thin['gaps'] > 0.002:
+                parts.append(f"{self.channel_display_name(channel)} tiene huecos de menos de "
+                             f"{report['min_line_mm']:.2f} mm que se taparán")
         parts.append(f"vista previa al {self.preview_scale:.0%}")
         self.status_bar.showMessage("Separado: " + "; ".join(parts) + ".")
 
@@ -3424,6 +3447,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.update_preview()
 
             self.show_quality_summary(settings)
+            self.update_resolution_advice()
         except Exception as e:
             print(f"❌ Error durante la separación: {e}")
             import traceback

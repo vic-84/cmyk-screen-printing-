@@ -157,6 +157,13 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
 - Verificada en Chromium: carga, CMYK sobre algodón negro, color plano y descarga del zip, sin errores en consola.
 - Pruebas: 56 (5 de la API web).
 
+### Control de detalle en tintas sólidas *(agregado tras probar con arte de línea)*
+Probado con un arte de dos tintas planas (rojo y negro sobre fondo claro):
+- Resultados: 99.4–100 % de cada color original cubierto, 0 % de tinta sobre el fondo, películas sólidas (solo 0/255) y knockout limpio. El trapping crece solo bajo el color más oscuro.
+- **Líneas finas y huecos**: se avisa cuando una tinta sólida tiene trazos o separaciones más angostos que ~1.5 pasos de hilo (malla 120 → 0.32 mm; malla 200 → 0.19 mm), medido al tamaño real de salida. La vista «Puntos en riesgo» los marca: naranja lo que se corta, azul lo que se tapa. Las esquinas de los trazos gruesos no cuentan como líneas finas.
+- **Limpiar motas** (0.25 mm por defecto): elimina manchas sueltas de ruido JPEG o antialias que se grabarían como suciedad. Las motas que quedan se cuentan aparte en el resumen.
+- **Aviso de resolución** según la técnica: 2 × LPI con trama, ~200 dpi para bordes limpios en tintas sólidas, y la resolución del índice en color índice.
+
 ### Gestión de color ICC *(agregada)*
 Algunas marcas exigen separar con su perfil ICC. `src/core/icc.py`, sobre LittleCMS 2.19:
 - **Separación CMYK con perfil**: sRGB → CMYK con el perfil de salida elegido. El GCR y la tinta total los define el perfil (GRACoL: negro C80 M72 Y68 K100 = 320 %). El límite de tinta de la app es **opcional** y está apagado por defecto, para respetar el perfil sin modificar.

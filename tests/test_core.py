@@ -462,6 +462,29 @@ class CoreTests(unittest.TestCase):
         overlay = sim.dot_risk_overlay(np.zeros((20, 20, 3), np.uint8), channels, settings)
         self.assertTrue((overlay[5, 15] == (235, 120, 20)).all())
 
+    def test_thin_lines_in_solid_inks_are_flagged_by_mesh(self):
+        image = np.full((200, 200, 3), 230, dtype=np.uint8)
+        image[20:180, 40:42] = 0      # línea de 2 px = 0.17 mm a 300 dpi
+        image[20:180, 100:130] = 0    # trazo de 2.5 mm
+        spots = [{"id": "S1", "name": "Negro", "rgb": [0, 0, 0], "halftone": False}]
+        coarse = JobSettings(mode="spot", garment_rgb=[230, 230, 230], spot_colors=spots, mesh_tpi=120)
+        fine = JobSettings(mode="spot", garment_rgb=[230, 230, 230], spot_colors=spots, mesh_tpi=355)
+        channels, _, _ = render(image, None, coarse)
+        report = sim.quality_report(channels, coarse)
+        self.assertAlmostEqual(report["min_line_mm"], 0.3175, places=3)
+        self.assertIn("S1", report["thin"])
+        self.assertGreater(report["thin"]["S1"]["lines"], 0.05)          # la línea fina
+        self.assertLess(report["thin"]["S1"]["lines"], 0.2)              # el trazo grueso no
+        self.assertNotIn("S1", sim.quality_report(channels, fine)["thin"])  # 0.17 mm sí aguanta en malla 355
+        # Un cuadrado grueso con esquinas vivas no es «línea fina»
+        square = np.full((200, 200, 3), 230, dtype=np.uint8)
+        square[40:160, 40:160] = 0
+        square_channels, _, _ = render(square, None, coarse)
+        self.assertNotIn("S1", sim.quality_report(square_channels, coarse)["thin"])
+        overlay = sim.dot_risk_overlay(np.zeros((200, 200, 3), np.uint8), channels, coarse)
+        self.assertTrue((overlay[100, 41] == (235, 120, 20)).all())
+        self.assertFalse((overlay[100, 115] == (235, 120, 20)).all())
+
     def test_substrate_profile_and_view_modes_in_the_window(self):
         window = SimpleHalftoneApp()
         window._set_loaded_image(np.full((60, 40, 3), 120, dtype=np.uint8))
@@ -538,6 +561,33 @@ class CoreTests(unittest.TestCase):
             document = doc_input.load_document(path, dpi=144)
         self.assertEqual(document.source_type, "EPS")
         self.assertGreater(document.bgr[..., 0].mean(), 200)
+
+    def test_specks_are_removed_from_solid_spot_inks(self):
+        image = np.full((120, 120, 3), 230, dtype=np.uint8)
+        image[20:100, 20:60] = 0                 # trazo real
+        image[10, 100] = image[50, 90] = 0       # motas de 1 px (ruido)
+        image[80:82, 100:102] = 0                # mota de 2×2 px
+        spots = [{"id": "S1", "name": "Negro", "rgb": [0, 0, 0], "halftone": False}]
+        clean = JobSettings(mode="spot", garment_rgb=[230, 230, 230], spot_colors=spots, despeckle_mm=0.25)
+        raw = JobSettings(mode="spot", garment_rgb=[230, 230, 230], spot_colors=spots, despeckle_mm=0, mesh_tpi=120)
+        cleaned, _, _ = render(image, None, clean)
+        kept, _, _ = render(image, None, raw)
+        self.assertEqual(cleaned["S1"][10, 100], 0)
+        self.assertEqual(cleaned["S1"][81, 101], 0)
+        self.assertEqual(cleaned["S1"][60, 40], 255)             # el trazo sigue
+        self.assertEqual(kept["S1"][10, 100], 255)
+        report = sim.quality_report(kept, raw)["thin"]["S1"]
+        self.assertEqual(report["specks"], 3)          # malla 120: mínimo 0.32 mm = 3.75 px
+        self.assertLess(report["lines"], 0.005)        # el trazo grueso no cuenta como línea fina
+
+    def test_resolution_advice_for_solid_spot_colors(self):
+        spots = [{"id": "S1", "name": "Negro", "rgb": [0, 0, 0], "halftone": False}]
+        settings = JobSettings(mode="spot", spot_colors=spots, lpi=45, fit_to_paper=True,
+                               paper_width_mm=254, paper_height_mm=254)
+        level, message = doc_input.resolution_advice((1000, 1000), 72, settings)   # 100 dpi
+        self.assertEqual(level, "riesgo")
+        self.assertIn("tintas sólidas", message)
+        self.assertEqual(doc_input.resolution_advice((2000, 2000), 72, settings)[0], "ok")
 
     def test_resolution_advice_uses_the_final_size(self):
         settings = JobSettings(fit_to_paper=True, paper_width_mm=254, paper_height_mm=254, lpi=60)

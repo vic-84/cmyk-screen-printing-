@@ -125,21 +125,86 @@ def total_ink(toned, settings):
     return total / 2.55
 
 
-def quality_report(channels, settings):
-    """Resumen: tinta total y puntos que la malla no sostiene."""
+# Detalle mínimo en tintas sólidas: una línea necesita ~1.5 pasos de hilo de
+# ancho para que la emulsión la sostenga (malla 120 → 0.32 mm; 200 → 0.19 mm)
+MIN_LINE_PITCHES = 1.5
+
+
+def min_line_mm(mesh_tpi):
+    return MIN_LINE_PITCHES * 25.4 / mesh_tpi if mesh_tpi > 0 else 0.0
+
+
+def solid_channels(channels, settings):
+    """Canales que se imprimen sólidos (sin trama): donde importa el grosor de línea."""
+    names = []
+    for name in channels:
+        if name == 'W':
+            continue
+        spot = settings.spot(name)
+        if settings.mode == 'index' or (spot is not None and not spot.get('halftone')):
+            names.append(name)
+    return names
+
+
+def thin_detail(ink, settings, scale=1.0):
+    """
+    (líneas finas, huecos finos): máscaras de tinta más angosta que el mínimo
+    de la malla (se cortan) y de separaciones más angostas (se tapan).
+    """
+    width_px = min_line_mm(settings.mesh_tpi) / 25.4 * settings.dpi * scale
+    # Tamaño impar: un núcleo par no está centrado y marca un borde entero
+    size = 2 * int(round((width_px - 1) / 2)) + 1
+    if size < 3:
+        empty = np.zeros(ink.shape, dtype=bool)
+        return empty, empty
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (size, size))
+    ink_u8 = ink.astype(np.uint8)
+    # La apertura quita lo más angosto que el mínimo, pero también redondea las
+    # esquinas de los trazos gruesos. Lo que queda junto a un trazo grueso
+    # (a menos de un ancho mínimo) es esquina, no línea fina.
+    wide = cv2.morphologyEx(ink_u8, cv2.MORPH_OPEN, kernel)
+    thin_lines = ink & ~cv2.dilate(wide, kernel).astype(bool)
+    # Igual para los huecos: el cierre también rellena esquinas cóncavas
+    closed = cv2.morphologyEx(ink_u8, cv2.MORPH_CLOSE, kernel)
+    open_space = cv2.dilate((1 - closed).astype(np.uint8), kernel).astype(bool)
+    thin_gaps = ~ink & closed.astype(bool) & ~open_space
+    return thin_lines, thin_gaps
+
+
+def quality_report(channels, settings, scale=1.0):
+    """Resumen: tinta total, puntos que la malla no sostiene y detalle demasiado fino."""
     toned = toned_channels(channels, settings)
     tac = total_ink(toned, settings)
     low, high = holdable_range(settings.mesh_tpi, settings.lpi)
     lost = plugged = 0.0
     for channel, data in toned.items():
+        if channel in solid_channels(channels, settings):
+            continue
         percent = data.astype(np.float32) / 2.55
         lost = max(lost, float(((percent > 0.5) & (percent < low)).mean()))
         plugged = max(plugged, float(((percent > high) & (percent < 99.5)).mean()))
+    thin = {}
+    min_px = min_line_mm(settings.mesh_tpi) / 25.4 * settings.dpi * scale
+    for channel in solid_channels(channels, settings):
+        ink = channels[channel] >= 128
+        if ink.any():
+            lines, gaps = thin_detail(ink, settings, scale)
+            # Las motas sueltas se cuentan aparte: no son líneas del diseño
+            count, labels, stats, _ = cv2.connectedComponentsWithStats(ink.astype(np.uint8), connectivity=8)
+            specks = int((stats[1:, cv2.CC_STAT_AREA] < max(1, np.pi / 4 * min_px ** 2)).sum()) if count > 1 else 0
+            speck_mask = np.zeros(count, dtype=bool)
+            if count > 1:
+                speck_mask[1:] = stats[1:, cv2.CC_STAT_AREA] < max(1, np.pi / 4 * min_px ** 2)
+            lines &= ~speck_mask[labels]
+            if lines.any() or gaps.any() or specks:
+                thin[channel] = {'lines': float(lines.sum() / ink.sum()),
+                                 'gaps': float(gaps.sum() / ink.sum()), 'specks': specks}
     return {
         'tac_max': float(tac.max()) if tac is not None else 0.0,
         'tac_over': float((tac > settings.ink_limit).mean()) if tac is not None else 0.0,
         'hold_min': low, 'hold_max': high,
         'lost': lost, 'plugged': plugged,
+        'min_line_mm': min_line_mm(settings.mesh_tpi), 'thin': thin,
     }
 
 
@@ -162,14 +227,23 @@ def tac_overlay(base_rgb, channels, settings):
     return out
 
 
-def dot_risk_overlay(base_rgb, channels, settings):
-    """Naranja: puntos de luz que se perderán. Azul: sombras que se cerrarán."""
+def dot_risk_overlay(base_rgb, channels, settings, scale=1.0):
+    """
+    Naranja: puntos de luz o líneas que la malla no sostiene (se pierden).
+    Azul: sombras o huecos que se cerrarán (se tapan).
+    """
     toned = toned_channels(channels, settings)
     low, high = holdable_range(settings.mesh_tpi, settings.lpi)
     out = _dimmed(base_rgb)
     lost = np.zeros(out.shape[:2], dtype=bool)
     plugged = np.zeros(out.shape[:2], dtype=bool)
-    for data in toned.values():
+    solids = solid_channels(channels, settings)
+    for name, data in toned.items():
+        if name in solids:
+            lines, gaps = thin_detail(channels[name] >= 128, settings, scale)
+            lost |= lines
+            plugged |= gaps
+            continue
         percent = data.astype(np.float32) / 2.55
         lost |= (percent > 0.5) & (percent < low)
         plugged |= (percent > high) & (percent < 99.5)

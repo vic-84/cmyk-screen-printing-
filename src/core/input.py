@@ -217,13 +217,25 @@ def effective_dpi(image_shape, image_dpi, settings):
 
 
 def resolution_advice(image_shape, image_dpi, settings):
-    """(nivel, mensaje): la imagen debería tener al menos 2 × LPI al tamaño final."""
+    """
+    (nivel, mensaje). Con trama, la imagen debería tener al menos 2 × LPI al
+    tamaño final. En tintas sólidas (color plano sin semitono) no hay trama:
+    lo que cuenta es el borde de los trazos (~200 dpi para bordes limpios). En
+    color índice, la resolución de la rejilla de índice.
+    """
     effective = effective_dpi(image_shape, image_dpi, settings)
-    needed = 2 * settings.lpi
+    solid_only = (settings.mode == 'spot' and settings.spot_colors
+                  and not any(spot.get('halftone') for spot in settings.spot_colors))
+    if settings.mode == 'index':
+        needed, minimum, purpose = settings.index_resolution, settings.index_resolution * 0.75, "el color índice"
+    elif solid_only:
+        needed, minimum, purpose = 200.0, 120.0, "bordes limpios en tintas sólidas"
+    else:
+        needed, minimum, purpose = 2 * settings.lpi, 1.5 * settings.lpi, f"{settings.lpi:g} LPI"
     if effective >= needed:
-        return 'ok', f"{effective:.0f} dpi al tamaño final (mínimo recomendado {needed:.0f} para {settings.lpi:g} LPI)."
-    if effective >= 1.5 * settings.lpi:
-        return 'aviso', (f"{effective:.0f} dpi al tamaño final: justo para {settings.lpi:g} LPI "
+        return 'ok', f"{effective:.0f} dpi al tamaño final (mínimo recomendado {needed:.0f} para {purpose})."
+    if effective >= minimum:
+        return 'aviso', (f"{effective:.0f} dpi al tamaño final: justo para {purpose} "
                          f"(ideal {needed:.0f}). Los detalles finos se suavizarán.")
-    return 'riesgo', (f"Solo {effective:.0f} dpi al tamaño final: poca resolución para {settings.lpi:g} LPI "
+    return 'riesgo', (f"Solo {effective:.0f} dpi al tamaño final: poca resolución para {purpose} "
                       f"(mínimo {needed:.0f}). Usa una imagen más grande o un tamaño menor.")

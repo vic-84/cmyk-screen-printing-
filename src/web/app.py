@@ -217,8 +217,8 @@ def preview(doc_id: str = Form(...), settings: str = Form("{}"), view: str = For
     elif view == "tac":
         printed = sim.tac_overlay(printed, channels, job)
     elif view == "dots":
-        printed = sim.dot_risk_overlay(printed, channels, job)
-    report = sim.quality_report(channels, job)
+        printed = sim.dot_risk_overlay(printed, channels, job, scale)
+    report = sim.quality_report(channels, job, scale)
     advice = doc_input.resolution_advice(document.bgr.shape, document.dpi, job)
     return {"image": _png_base64(printed), "scale": scale,
             "channels": [{"id": c, "name": job.channel_name(c), "angle": job.channel_angle(c),

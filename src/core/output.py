@@ -438,7 +438,11 @@ def save_positive(path_without_ext, image, settings):
 
 
 def save_pdf(path, images, dpi):
-    """PDF con una página por canal, al tamaño físico correcto."""
-    pages = [Image.fromarray(img).convert('L') for img in images]
+    """
+    PDF con una página por canal, al tamaño físico correcto. Las películas son
+    de 1 bit (tinta o no): se guardan así, sin pérdida y con mucho menos peso.
+    """
+    pages = [Image.fromarray(img).convert('L').point(lambda v: 255 if v >= 128 else 0).convert('1')
+             for img in images]
     if pages:
         pages[0].save(path, save_all=True, append_images=pages[1:], resolution=dpi)

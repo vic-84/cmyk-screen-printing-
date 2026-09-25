@@ -176,7 +176,32 @@ def separate_channels(bgr, alpha, settings, scale=1.0, source_px=1.0):
         channels['W'] = generate_white_base(
             bgr, settings.white_base_threshold,
             int(round(settings.white_base_choke_px * scale)), alpha)
+    if settings.uses_garment_as_black:
+        garment_as_black(channels, settings.garment_black_threshold)
     return channels
+
+
+GARMENT_BLACK_RAMP = 0.5    # la base baja de 100 % a 0 % a lo largo de 50 puntos de K
+
+
+def garment_as_black(channels, threshold):
+    """
+    Prenda como negro (4 estaciones en prenda oscura): se elimina la película K
+    y la tela hace de negro.
+
+    - La base se retira solo donde el negro pasa de threshold %, así los
+      blancos y las sombras suaves conservan su base y no se agrisan.
+    - C, M y Y se recortan donde ya no queda base: sobre la tela oscura sin
+      base no se verían y solo gastarían tinta.
+    Modifica channels en el lugar.
+    """
+    k = channels.pop('K').astype(np.float32) / 255.0
+    remove = np.clip((k - threshold / 100.0) / GARMENT_BLACK_RAMP, 0.0, 1.0)
+    base = channels['W'].astype(np.float32) * (1.0 - remove)
+    channels['W'] = np.round(base).astype(np.uint8)
+    cover = np.clip(base / 255.0 * 1.5, 0.0, 1.0)
+    for name in 'CMY':
+        channels[name] = np.round(channels[name] * cover).astype(np.uint8)
 
 
 def preview_scale(prepared_shape, settings):

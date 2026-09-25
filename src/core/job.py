@@ -98,6 +98,10 @@ class JobSettings:
     base_rgb: list = field(default_factory=lambda: [255, 255, 255])
     white_base_threshold: int = WHITE_BASE_SETTINGS['opacity_threshold']
     white_base_choke_px: int = WHITE_BASE_SETTINGS['choke_pixels']
+    # Cuatricromía en prenda oscura con 4 estaciones: no se imprime el negro, la
+    # tela hace de K. La base se retira donde el negro pasa de este %.
+    garment_as_black: bool = False
+    garment_black_threshold: float = 25.0
 
     # Color plano: [{'id', 'name', 'rgb', 'halftone', 'opaque', 'base', 'library'}]
     spot_colors: list = field(default_factory=list)
@@ -154,8 +158,15 @@ class JobSettings:
         own = self.channel_tone.get(channel, {})
         return {key: own[key] if key in own else getattr(self, key) for key in self.TONE_KEYS}
 
+    @property
+    def uses_garment_as_black(self):
+        """Solo en cuatricromía con base: sin base la prenda ya se ve en todo el diseño."""
+        return self.garment_as_black and self.mode == 'cmyk' and self.white_base
+
     def ink_channels(self):
         """Canales de tinta de la técnica actual (sin base blanca)."""
+        if self.uses_garment_as_black:
+            return ['C', 'M', 'Y']
         if self.mode in ('spot', 'index'):
             return [spot['id'] for spot in self.spot_colors]
         if self.mode == 'cmyk_spot':

@@ -252,3 +252,11 @@ Algunas marcas exigen separar con su perfil ICC. `src/core/icc.py`, sobre Little
 - Se guarda en `JobSettings.channel_tone` y `tone_for(canal)` resuelve los valores. Lo usan la trama, la simulación, el control de calidad y el CLI, que lee el JSON.
 - La lista de canales marca «tono propio» y las especificaciones anotan el tono de cada película.
 - **Curva de color por positivo**: al seleccionar un canal aparecen Luces (25 %), Medios (50 %) y Sombras (75 %), de −30 a +30 puntos. Suben o bajan la tinta de ese color sin mover el umbral. La curva nunca invierte el tono y queda antes de la compensación de ganancia (`JobSettings.channel_curve`, `tone.color_curve`).
+
+## Prenda como negro (cuatricromía en 4 estaciones)
+
+- Opción en Sustrato y tinta, solo para cuatricromía con base. Elimina la película K y la tela oscura hace de negro: se imprime base + C + M + Y.
+- La base se retira solo donde el negro pasa del % elegido (25 % por defecto), así los blancos no se agrisan.
+- C, M y Y se recortan donde ya no queda base, porque sobre la tela sin base no se verían.
+- Prueba con la catrina: ΔE 11.7 contra 12.9 del normal de 5 marcos. Se pierden los grises finos del cabello y del fondo. **Pendiente: prueba en prenda real.**
+- El PDF de películas ahora se guarda en 1 bit, sin pérdida: pasó de 22.6 a 2.7 MB en A3.

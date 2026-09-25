@@ -946,6 +946,45 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(channel_label("K", window.job_settings()).startswith("3/5"))
         window.close()
 
+    # ---------------------------------------------------------------- prenda como negro
+
+    def test_garment_as_black_drops_k_and_opens_the_base_only_in_strong_blacks(self):
+        # Franjas: blanco, gris claro, gris medio, negro
+        image = np.zeros((40, 160, 3), dtype=np.uint8)
+        for i, v in enumerate((255, 190, 110, 10)):
+            image[:, i * 40:(i + 1) * 40] = v
+        base = dict(mode="cmyk", white_base=True, garment_rgb=[20, 20, 22], lpi=20)
+        normal = render(image, None, JobSettings(**base))[0]
+        black = render(image, None, JobSettings(garment_as_black=True, garment_black_threshold=25, **base))[0]
+        self.assertEqual(JobSettings(garment_as_black=True, **base).channels(), ["W", "Y", "C", "M"])
+        self.assertNotIn("K", black)
+        col = lambda ch, i: int(ch[20, i * 40 + 20])
+        self.assertEqual(col(black["W"], 0), col(normal["W"], 0))     # el blanco conserva toda la base
+        self.assertEqual(col(black["W"], 3), 0)                       # el negro queda de la prenda
+        self.assertTrue(all(col(black[n], 3) == 0 for n in "CMY"))    # sin CMY donde no hay base
+        # Un umbral más alto conserva más base en los grises
+        high = render(image, None, JobSettings(garment_as_black=True, garment_black_threshold=60, **base))[0]
+        self.assertGreaterEqual(col(high["W"], 2), col(black["W"], 2))
+
+    def test_garment_as_black_only_applies_to_cmyk_with_base(self):
+        self.assertFalse(JobSettings(garment_as_black=True, white_base=False).uses_garment_as_black)
+        self.assertFalse(JobSettings(garment_as_black=True, white_base=True, mode="cmyk_spot").uses_garment_as_black)
+        self.assertIn("K", JobSettings(garment_as_black=True, white_base=False).channels())
+
+    def test_garment_as_black_in_the_window(self):
+        window = SimpleHalftoneApp()
+        window._set_loaded_image(np.full((40, 40, 3), 60, dtype=np.uint8))
+        window.white_base_cb.setChecked(False)
+        self.assertFalse(window.garment_black_cb.isEnabled())
+        window.white_base_cb.setChecked(True)
+        window.garment_black_cb.setChecked(True)
+        self.assertTrue(window.garment_black_spin.isEnabled())
+        window.process_cmyk()
+        rows = [window.channel_list.item(i).text() for i in range(window.channel_list.count())]
+        self.assertEqual(rows, ["W", "Y", "C", "M"])
+        self.assertNotIn("K", window.channel_arrays)
+        window.close()
+
     def test_gray_base_is_named_and_simulated_with_its_color(self):
         red = [220, 30, 30]
         spots = [{"id": "S1", "name": "Rojo", "rgb": red, "halftone": False, "opaque": False, "base": True}]

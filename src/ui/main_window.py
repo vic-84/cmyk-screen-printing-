@@ -813,6 +813,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.ink_limit_spin.setValue(TOTAL_INK_LIMIT)
         self.ink_limit_spin.setToolTip("Suma máxima de C+M+Y+K. Textil: 240–280 %")
         substrate_layout.addWidget(self.ink_limit_spin, 2, 1)
+        self.white_base_cb = QtWidgets.QCheckBox("Imprimir base")
+        self.white_base_cb.setToolTip("Para prenda oscura: la base se imprime primero y se contrae en los bordes")
+        substrate_layout.addWidget(self.white_base_cb, 4, 1)
+        self.garment_color_btn = QtWidgets.QPushButton("Color de la prenda…")
+        self.garment_color_btn.clicked.connect(self.select_garment_color)
+        substrate_layout.addWidget(field_label("Prenda"), 5, 0)
+        substrate_layout.addWidget(self.garment_color_btn, 5, 1)
         controls_layout.addWidget(substrate_group)
 
         # === GESTIÓN DE COLOR ===
@@ -856,25 +863,48 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         controls_layout.addWidget(color_group)
 
         # === SALIDA ===
+        # Tres bloques en el orden en que se decide: el lienzo (la película),
+        # dónde va el diseño dentro de él y qué lleva la película además del diseño.
         format_group = QtWidgets.QGroupBox("Salida")
-        format_layout = QtWidgets.QVBoxLayout(format_group)
-        format_layout.setSpacing(6)
+        out = QtWidgets.QGridLayout(format_group)
+        out.setHorizontalSpacing(10)
+        out.setVerticalSpacing(6)
+        out.setColumnStretch(1, 1)
+        row = 0
 
-        format_row = QtWidgets.QHBoxLayout()
-        format_row.addWidget(field_label("Formato"))
+        def subtitle(text):
+            nonlocal row
+            label = QtWidgets.QLabel(text)
+            label.setProperty("rol", "subtitulo")
+            out.addWidget(label, row, 0, 1, 2)
+            row += 1
+
+        def field(text, widget):
+            nonlocal row
+            label = field_label(text)
+            out.addWidget(label, row, 0)
+            out.addWidget(widget, row, 1)
+            row += 1
+            return label
+
+        def full(widget):
+            nonlocal row
+            out.addWidget(widget, row, 0, 1, 2)
+            row += 1
+
+        subtitle("Lienzo")
         self.print_format_combo = compact_combo(QtWidgets.QComboBox())
         self.print_format_combo.addItems(list(PRINT_FORMATS.keys()) + ["Personalizado"])
+        self.print_format_combo.setToolTip("Medida de la película. El diseño se coloca dentro y nunca se corta")
         self.print_format_combo.currentIndexChanged.connect(self.on_print_format_changed)
-        format_row.addWidget(self.print_format_combo, 1)
-        format_layout.addLayout(format_row)
-
-        self.format_info_label = secondary_label("")
-        format_layout.addWidget(self.format_info_label)
+        field("Formato", self.print_format_combo)
 
         self.custom_size_widget = QtWidgets.QWidget()
         custom_layout = QtWidgets.QGridLayout(self.custom_size_widget)
         custom_layout.setContentsMargins(0, 0, 0, 0)
-        custom_layout.setSpacing(6)
+        custom_layout.setHorizontalSpacing(10)
+        custom_layout.setVerticalSpacing(6)
+        custom_layout.setColumnStretch(1, 1)
         self.unit_combo = compact_combo(QtWidgets.QComboBox())
         self.unit_combo.addItems([f"{k} ({v['label']})" for k, v in MEASUREMENT_UNITS.items()])
         self.custom_width = QtWidgets.QDoubleSpinBox()
@@ -882,14 +912,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.custom_dpi = QtWidgets.QSpinBox()
         self.custom_dpi.setRange(72, 1200)
         self.custom_dpi.setValue(300)
-        custom_layout.addWidget(field_label("Unidad"), 0, 0)
-        custom_layout.addWidget(self.unit_combo, 0, 1)
-        custom_layout.addWidget(field_label("Ancho"), 1, 0)
-        custom_layout.addWidget(self.custom_width, 1, 1)
-        custom_layout.addWidget(field_label("Alto"), 2, 0)
-        custom_layout.addWidget(self.custom_height, 2, 1)
-        custom_layout.addWidget(field_label("DPI"), 3, 0)
-        custom_layout.addWidget(self.custom_dpi, 3, 1)
+        self.custom_dpi.setSuffix(" dpi")
+        for i, (text, widget) in enumerate((("Unidad", self.unit_combo), ("Ancho", self.custom_width),
+                                            ("Alto", self.custom_height), ("DPI sugerido", self.custom_dpi))):
+            custom_layout.addWidget(field_label(text), i, 0)
+            custom_layout.addWidget(widget, i, 1)
         # Rango, decimales y unidad reales: sin esto Qt limita a 0–99.99 y
         # un formato de 300 × 400 mm se recortaba a 99.99 mm
         self.setup_dimension_spinbox(self.custom_width, "mm")
@@ -900,121 +927,99 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         for control in (self.custom_width, self.custom_height, self.custom_dpi):
             control.valueChanged.connect(self.on_output_size_changed)
         self.custom_size_widget.setVisible(False)
-        format_layout.addWidget(self.custom_size_widget)
-        placement_row = QtWidgets.QGridLayout()
-        placement_row.setHorizontalSpacing(10)
-        placement_row.setColumnStretch(1, 1)
-        placement_row.addWidget(field_label("Imagen"), 0, 0)
-        self.placement_combo = compact_combo(QtWidgets.QComboBox())
-        self.placement_combo.addItem("Ajustar al lienzo", "fit")
-        self.placement_combo.addItem("Tamaño real", "real")
-        self.placement_combo.addItem("Ancho del diseño", "width")
-        self.placement_combo.setToolTip(
-            "El lienzo es la medida de la película. La imagen se coloca dentro: ajustada al área útil, "
-            "a su tamaño real (según sus DPI) o a un ancho fijo. Nunca se corta: si no cabe, se reduce.")
-        placement_row.addWidget(self.placement_combo, 0, 1)
-        self.design_width_spin = QtWidgets.QDoubleSpinBox()
-        self.design_width_spin.setRange(10, 2000)
-        self.design_width_spin.setDecimals(1)
-        self.design_width_spin.setSuffix(" mm")
-        self.design_width_spin.setValue(280)
-        self.design_width_spin.setVisible(False)
-        placement_row.addWidget(self.design_width_spin, 1, 1)
-        placement_row.addWidget(field_label("Posición"), 2, 0)
-        self.align_combo = compact_combo(QtWidgets.QComboBox())
-        self.align_combo.addItem("Centrada", "center")
-        self.align_combo.addItem("Arriba al centro", "top")
-        placement_row.addWidget(self.align_combo, 2, 1)
-        format_layout.addLayout(placement_row)
-        self.placement_combo.currentIndexChanged.connect(self.on_placement_changed)
-        self.design_width_spin.valueChanged.connect(self.on_output_size_changed)
-        self.align_combo.currentIndexChanged.connect(self.on_output_size_changed)
-        self.design_size_label = secondary_label("")
-        self.design_size_label.setWordWrap(True)
-        format_layout.addWidget(self.design_size_label)
+        full(self.custom_size_widget)
 
-        options_grid = QtWidgets.QGridLayout()
-        options_grid.setHorizontalSpacing(12)
-        options_grid.setVerticalSpacing(4)
-        self.guides_cb = QtWidgets.QCheckBox("Guías de registro")
-        self.guides_cb.setToolTip("Cruces, marcas de centro, datos del canal y tira de control dentro del "
-                                  "margen del lienzo: la película no crece")
-        self.white_base_cb = QtWidgets.QCheckBox("Base blanca")
-        self.white_base_cb.setToolTip("Para prenda oscura: se imprime primero y se contrae 2 px en los bordes")
-        self.show_halftones_cb = QtWidgets.QCheckBox("Ver trama")
-        self.show_halftones_cb.setChecked(True)
-        self.show_halftones_cb.stateChanged.connect(self.update_preview)
-        options_grid.addWidget(self.guides_cb, 0, 0)
-        self.guide_position_combo = compact_combo(QtWidgets.QComboBox())
-        self.guide_position_combo.addItem("Guías: automático", "auto")
-        self.guide_position_combo.addItem("Guías en margen", "margin")
-        self.guide_position_combo.addItem("Guías en espacios en blanco", "blank")
-        self.guide_position_combo.setToolTip(
-            "En margen: el diseño se reduce para dejar el margen de las guías.\n"
-            "En espacios en blanco: el diseño usa todo el lienzo y las cruces, datos y tira se colocan "
-            "donde no hay tinta (por ejemplo, el borde que deja el efecto desgastado).\n"
-            "Automático: en blanco si hay desgaste, en margen si no.")
-        options_grid.addWidget(self.guide_position_combo, 2, 0, 1, 2)
-        self.guide_margin_spin = QtWidgets.QDoubleSpinBox()
-        self.guide_margin_spin.setRange(5, 50)
-        self.guide_margin_spin.setDecimals(1)
-        self.guide_margin_spin.setSuffix(" mm de margen")
-        self.guide_margin_spin.setValue(15)
-        self.guide_margin_spin.setToolTip("Cuánto se reduce el diseño en cada lado para dejar lugar a las guías")
-        options_grid.addWidget(self.guide_margin_spin, 3, 0)
-        self.distress_spin = QtWidgets.QDoubleSpinBox()
-        self.distress_spin.setRange(0, 80)
-        self.distress_spin.setDecimals(0)
-        self.distress_spin.setSuffix(" mm desgaste")
-        self.distress_spin.setSpecialValueText("Sin desgaste")
-        self.distress_spin.setToolTip("Efecto desgastado: rompe el borde del diseño para que no quede cuadrado. "
-                                      "Deja espacio en blanco donde van las guías")
-        options_grid.addWidget(self.distress_spin, 3, 1)
-        for control in (self.guide_position_combo,):
-            control.currentIndexChanged.connect(self.on_output_size_changed)
-        for control in (self.guide_margin_spin, self.distress_spin):
-            control.valueChanged.connect(self.on_output_size_changed)
-        options_grid.addWidget(self.white_base_cb, 1, 0)
-        options_grid.addWidget(self.show_halftones_cb, 1, 1)
-        format_layout.addLayout(options_grid)
-
-        self.garment_color_btn = QtWidgets.QPushButton("Color de la prenda…")
-        self.garment_color_btn.clicked.connect(self.select_garment_color)
-        format_layout.addWidget(self.garment_color_btn)
-
-        film_grid = QtWidgets.QGridLayout()
-        film_grid.setHorizontalSpacing(10)
-        film_grid.setVerticalSpacing(6)
-        film_grid.setColumnStretch(1, 1)
-        film_grid.addWidget(field_label("Resolución"), 0, 0)
         self.output_dpi_combo = compact_combo(QtWidgets.QComboBox())
         self.output_dpi_combo.addItem("Según formato", 0)
         for dpi in (300, 600, 720, 1200):
             self.output_dpi_combo.addItem(f"{dpi} dpi", dpi)
         self.output_dpi_combo.setToolTip("DPI de la impresora de película. Más DPI = más niveles de gris por punto")
-        film_grid.addWidget(self.output_dpi_combo, 0, 1)
-        film_grid.addWidget(field_label("Archivo"), 1, 0)
+        field("Resolución", self.output_dpi_combo)
+        self.format_info_label = secondary_label("")
+        full(self.format_info_label)
+
+        subtitle("Diseño en el lienzo")
+        self.placement_combo = compact_combo(QtWidgets.QComboBox())
+        self.placement_combo.addItem("Ajustar al lienzo", "fit")
+        self.placement_combo.addItem("Tamaño real", "real")
+        self.placement_combo.addItem("Ancho del diseño", "width")
+        self.placement_combo.setToolTip(
+            "Ajustar: llena el área útil conservando la proporción. Tamaño real: según los DPI de la imagen. "
+            "Ancho del diseño: el ancho que indiques. Si no cabe, se reduce; nunca se corta.")
+        field("Imagen", self.placement_combo)
+        self.design_width_spin = QtWidgets.QDoubleSpinBox()
+        self.design_width_spin.setRange(10, 2000)
+        self.design_width_spin.setDecimals(1)
+        self.design_width_spin.setSuffix(" mm")
+        self.design_width_spin.setValue(280)
+        self.design_width_label = field("Ancho", self.design_width_spin)
+        self.design_width_spin.setVisible(False)
+        self.design_width_label.setVisible(False)
+        self.align_combo = compact_combo(QtWidgets.QComboBox())
+        self.align_combo.addItem("Centrada", "center")
+        self.align_combo.addItem("Arriba al centro", "top")
+        self.align_combo.setToolTip("Arriba al centro: la posición habitual de un estampado de pecho")
+        field("Posición", self.align_combo)
+        self.distress_spin = QtWidgets.QDoubleSpinBox()
+        self.distress_spin.setRange(0, 80)
+        self.distress_spin.setDecimals(0)
+        self.distress_spin.setSuffix(" mm")
+        self.distress_spin.setSpecialValueText("Sin desgaste")
+        self.distress_spin.setToolTip("Rompe el borde del diseño en manchas irregulares a lo largo de esta distancia, "
+                                      "para que no quede cuadrado. Deja espacio en blanco donde van las guías")
+        field("Borde desgastado", self.distress_spin)
+        self.design_size_label = secondary_label("")
+        full(self.design_size_label)
+        self.placement_combo.currentIndexChanged.connect(self.on_placement_changed)
+        self.design_width_spin.valueChanged.connect(self.on_output_size_changed)
+        self.align_combo.currentIndexChanged.connect(self.on_output_size_changed)
+        self.distress_spin.valueChanged.connect(self.on_output_size_changed)
+
+        subtitle("Guías y película")
+        self.guides_cb = QtWidgets.QCheckBox("Guías de registro")
+        self.guides_cb.setToolTip("Cruces, datos del canal y tira de control dentro del lienzo: la película no crece")
+        full(self.guides_cb)
+        self.guide_position_combo = compact_combo(QtWidgets.QComboBox())
+        self.guide_position_combo.addItem("Automática", "auto")
+        self.guide_position_combo.addItem("En margen", "margin")
+        self.guide_position_combo.addItem("En espacios en blanco", "blank")
+        self.guide_position_combo.setToolTip(
+            "En margen: el diseño se reduce para dejar el margen de las guías.\n"
+            "En espacios en blanco: el diseño usa todo el lienzo y las guías van donde no hay tinta "
+            "(por ejemplo, el borde desgastado).\n"
+            "Automática: en blanco si hay borde desgastado, en margen si no.")
+        field("Colocación", self.guide_position_combo)
+        self.guide_margin_spin = QtWidgets.QDoubleSpinBox()
+        self.guide_margin_spin.setRange(5, 50)
+        self.guide_margin_spin.setDecimals(1)
+        self.guide_margin_spin.setSuffix(" mm por lado")
+        self.guide_margin_spin.setValue(15)
+        self.guide_margin_spin.setToolTip("Cuánto se reduce el diseño en cada lado para dejar lugar a las guías")
+        field("Margen", self.guide_margin_spin)
+        self.guide_position_combo.currentIndexChanged.connect(self.on_output_size_changed)
+        self.guide_margin_spin.valueChanged.connect(self.on_output_size_changed)
+
         self.output_format_combo = compact_combo(QtWidgets.QComboBox())
         self.output_format_combo.addItem("PNG", "png")
         self.output_format_combo.addItem("TIFF 1 bit (RIP)", "tiff")
-        film_grid.addWidget(self.output_format_combo, 1, 1)
-        format_layout.addLayout(film_grid)
+        field("Archivo", self.output_format_combo)
 
         film_options = QtWidgets.QGridLayout()
         film_options.setHorizontalSpacing(12)
         self.control_strip_cb = QtWidgets.QCheckBox("Tira de control")
         self.control_strip_cb.setChecked(True)
-        self.control_strip_cb.setToolTip("Parches 5–95 % en el margen de cada película (requiere guías)")
+        self.control_strip_cb.setToolTip("Parches 5–95 % en cada película, para revisar exposición y ganancia")
         self.mirror_cb = QtWidgets.QCheckBox("Espejo")
         self.mirror_cb.setToolTip("Invierte la película de izquierda a derecha (emulsión abajo)")
         self.negative_cb = QtWidgets.QCheckBox("Negativo")
+        self.cmyk_composite_cb = QtWidgets.QCheckBox("TIFF CMYK con perfil")
+        self.cmyk_composite_cb.setToolTip("Exporta además la separación compuesta en un TIFF CMYK con el perfil incrustado")
         film_options.addWidget(self.control_strip_cb, 0, 0)
         film_options.addWidget(self.mirror_cb, 0, 1)
         film_options.addWidget(self.negative_cb, 1, 0)
-        self.cmyk_composite_cb = QtWidgets.QCheckBox("TIFF CMYK con perfil")
-        self.cmyk_composite_cb.setToolTip("Exporta además la separación compuesta en un TIFF CMYK con el perfil incrustado")
         film_options.addWidget(self.cmyk_composite_cb, 1, 1)
-        format_layout.addLayout(film_options)
+        out.addLayout(film_options, row, 0, 1, 2)
+        row += 1
         controls_layout.addWidget(format_group)
 
         # === CANALES ===
@@ -1177,6 +1182,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.misregister_spin.valueChanged.connect(lambda *_: self.update_preview())
         self.misregister_spin.setVisible(False)
         view_bar.addWidget(self.misregister_spin)
+        self.show_halftones_cb = QtWidgets.QCheckBox("Ver trama")
+        self.show_halftones_cb.setChecked(True)
+        self.show_halftones_cb.setToolTip("Muestra los puntos de la trama; sin ella, el tono continuo")
+        self.show_halftones_cb.stateChanged.connect(self.update_preview)
+        view_bar.addWidget(self.show_halftones_cb)
         view_bar.addStretch()
         self.step_label = QtWidgets.QLabel("Todas las pasadas")
         self.step_label.setProperty("rol", "secundario")
@@ -1288,6 +1298,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.mesh_unit_combo.currentIndexChanged.connect(self.on_mesh_unit_changed)
         self.shape_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.update_moire_analysis()
+        self.update_guide_controls()
+        self.update_format_info()
 
     # =====================================================================
     # == MÉTODOS DE LÓGICA Y EVENTOS
@@ -1540,13 +1552,26 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
     def on_output_size_changed(self, *_):
         """El tamaño del papel cambió: aviso de resolución, tamaño del diseño y vista previa."""
+        self.update_guide_controls()
+        self.update_format_info()
         self.update_resolution_advice()
         if self.preview_cache:
             self.schedule_reseparation()
 
     def on_placement_changed(self, *_):
-        self.design_width_spin.setVisible(self.placement_combo.currentData() == 'width')
+        by_width = self.placement_combo.currentData() == 'width'
+        self.design_width_spin.setVisible(by_width)
+        self.design_width_label.setVisible(by_width)
         self.on_output_size_changed()
+
+    def update_guide_controls(self):
+        """Solo se puede editar lo que aplica: colocación y tira con guías; margen si van en margen."""
+        guides = self.guides_cb.isChecked()
+        position = self.guide_position_combo.currentData()
+        in_blank = position == 'blank' or (position == 'auto' and self.distress_spin.value() > 0)
+        self.guide_position_combo.setEnabled(guides)
+        self.guide_margin_spin.setEnabled(guides and not in_blank)
+        self.control_strip_cb.setEnabled(guides)
 
     def design_size_text(self, settings=None):
         if self.image is None:
@@ -1556,11 +1581,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         width, height = placed.mm(settings.dpi)
         area_w, area_h = placed.area[2] / settings.dpi * 25.4, placed.area[3] / settings.dpi * 25.4
         in_margin = settings.registration_guides and not settings.guides_in_blank
-        text = (f"Lienzo {settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm"
-                + (f" (área útil {area_w:.0f} × {area_h:.0f} mm, guías en el margen)" if in_margin else "")
-                + (" (guías en los espacios en blanco del diseño)"
-                   if settings.registration_guides and settings.guides_in_blank else "")
-                + f". Diseño: {width:.1f} × {height:.1f} mm.")
+        text = f"El diseño sale de {width:.1f} × {height:.1f} mm"
+        if in_margin:
+            text += f", dentro del área útil de {area_w:.0f} × {area_h:.0f} mm que dejan las guías."
+        elif settings.registration_guides:
+            text += "; las guías van en los espacios en blanco del diseño."
+        else:
+            text += "."
         if placed.reduced:
             text += " No cabía al tamaño pedido: se redujo al área útil para no cortarlo."
         return text
@@ -2036,8 +2063,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
     def update_format_info(self):
         """Medida del lienzo elegido y DPI recomendado."""
         canvas = self.get_current_print_format()
-        self.format_info_label.setText(f"Lienzo {canvas['width']:g} × {canvas['height']:g} mm · "
-                                       f"{canvas['dpi_recommended']} DPI recomendado")
+        dpi = self.output_dpi_combo.currentData() or canvas['dpi_recommended']
+        self.format_info_label.setText(f"Película de {canvas['width']:g} × {canvas['height']:g} mm a {dpi} DPI.")
 
     def get_current_print_format(self):
         """Medida (mm) y DPI recomendado del lienzo elegido."""

@@ -53,6 +53,14 @@ QLabel {{
     background: transparent;
     font-weight: normal;
 }}
+QLabel[rol="subtitulo"] {{
+    color: {TEXTO_SUAVE};
+    font-size: 9pt;
+    font-weight: 600;
+    padding-top: 6px;
+    padding-bottom: 2px;
+    border-bottom: 1px solid {LINEA};
+}}
 QLabel[rol="secundario"] {{
     color: {TEXTO_SUAVE};
     font-size: 9pt;

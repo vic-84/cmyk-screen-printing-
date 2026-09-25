@@ -28,6 +28,10 @@
   fieldset { background: var(--superficie); border: 1px solid var(--linea); border-radius: 3px;
              margin: 14px 0 0; padding: 10px; }
   legend { font-weight: 600; padding: 0 4px; background: var(--mesa); }
+  h3.sub { font-size: 12px; font-weight: 600; color: var(--suave); margin: 10px 0 6px;
+           padding-bottom: 2px; border-bottom: 1px solid var(--linea); }
+  h3.sub:first-of-type { margin-top: 2px; }
+  :disabled { opacity: .55; }
   .row { display: grid; grid-template-columns: 118px 1fr auto; gap: 8px; align-items: center; margin: 6px 0; }
   .row > label { color: var(--suave); }
   .row .span2 { grid-column: 2 / 4; }
@@ -179,31 +183,39 @@
 
       <fieldset>
         <legend>Salida</legend>
-        <div class="row"><label for="paper">Lienzo</label><select id="paper" class="span2"></select></div>
+        <h3 class="sub">Lienzo</h3>
+        <div class="row"><label for="paper">Formato</label><select id="paper" class="span2"
+          title="Medida de la película. El diseño se coloca dentro y nunca se corta"></select></div>
         <div class="row" id="customRow" hidden><label for="customW">Medida (mm)</label>
           <input type="number" id="customW" value="300" min="10" max="2000" step="0.5" aria-label="Ancho en mm">
           <input type="number" id="customH" value="400" min="10" max="2000" step="0.5" aria-label="Alto en mm"></div>
         <div class="row"><label for="dpi">Resolución</label><select id="dpi" class="span2">
           <option>300</option><option>600</option><option>720</option><option>1200</option></select></div>
-        <div class="row"><label for="format">Archivo</label><select id="format" class="span2">
-          <option value="png">PNG</option><option value="tiff">TIFF 1 bit (RIP)</option></select></div>
-        <div class="row"><label for="placement">Imagen</label><select id="placement" class="span2">
+
+        <h3 class="sub">Diseño en el lienzo</h3>
+        <div class="row"><label for="placement">Imagen</label><select id="placement" class="span2"
+          title="Ajustar: llena el área útil. Tamaño real: según los DPI de la imagen. Si no cabe, se reduce; nunca se corta">
           <option value="fit">Ajustar al lienzo</option><option value="real">Tamaño real</option>
-          <option value="width">Ancho del diseño…</option></select></div>
+          <option value="width">Ancho del diseño</option></select></div>
         <div class="row" id="designWidthRow" hidden><label for="designWidth">Ancho (mm)</label>
           <input type="number" id="designWidth" class="span2" value="280" min="10" max="2000" step="0.5"></div>
         <div class="row"><label for="align">Posición</label><select id="align" class="span2">
           <option value="center">Centrada</option><option value="top">Arriba al centro</option></select></div>
         <div class="row"><label for="distress">Desgaste (mm)</label>
-          <input type="number" id="distress" class="span2" value="0" min="0" max="80" step="1"></div>
-        <div class="row"><label for="guidePos">Guías</label><select id="guidePos" class="span2">
-          <option value="auto">Automático</option><option value="margin">En margen (reduce el diseño)</option>
+          <input type="number" id="distress" class="span2" value="0" min="0" max="80" step="1"
+            title="Rompe el borde del diseño para que no quede cuadrado; 0 = sin desgaste"></div>
+
+        <h3 class="sub">Guías y película</h3>
+        <div class="checks"><label><input type="checkbox" id="guides" checked> Guías de registro</label></div>
+        <div class="row"><label for="guidePos">Colocación</label><select id="guidePos" class="span2"
+          title="En margen: el diseño se reduce. En espacios en blanco: las guías van donde no hay tinta. Automática: en blanco si hay borde desgastado">
+          <option value="auto">Automática</option><option value="margin">En margen</option>
           <option value="blank">En espacios en blanco</option></select></div>
         <div class="row"><label for="guideMargin">Margen (mm)</label>
           <input type="number" id="guideMargin" class="span2" value="15" min="5" max="50" step="0.5"></div>
-        <p class="hint">La película mide el lienzo y la imagen nunca se corta. Sin desgaste, las guías van en un margen y el diseño se reduce. Con desgaste, las guías van en el borde en blanco que este deja.</p>
+        <div class="row"><label for="format">Archivo</label><select id="format" class="span2">
+          <option value="png">PNG</option><option value="tiff">TIFF 1 bit (RIP)</option></select></div>
         <div class="checks">
-          <label><input type="checkbox" id="guides" checked> Guías de registro</label>
           <label><input type="checkbox" id="strip" checked> Tira de control</label>
           <label><input type="checkbox" id="mirror"> Espejo</label>
           <label><input type="checkbox" id="negative"> Negativo</label>
@@ -457,6 +469,13 @@ async function init() {
   fillSelect($("paper"), Object.keys(o.papers).map(k => [k, k]), "A3");
   $("paper").addEventListener("change", () => { $("customRow").hidden = $("paper").value !== "Personalizado"; });
   $("placement").addEventListener("change", () => { $("designWidthRow").hidden = $("placement").value !== "width"; });
+  const guideControls = () => {
+    const on = $("guides").checked, pos = $("guidePos").value;
+    const blank = pos === "blank" || (pos === "auto" && +$("distress").value > 0);
+    $("guidePos").disabled = !on; $("strip").disabled = !on; $("guideMargin").disabled = !on || blank;
+  };
+  for (const id of ["guides", "guidePos", "distress"]) $(id).addEventListener("change", guideControls);
+  guideControls();
   $("customW").addEventListener("change", schedule); $("customH").addEventListener("change", schedule);
   fillSelect($("iccIntent"), o.intents.map(k => [k, k]));
   fillSelect($("base"), [...Object.keys(o.bases).map(k => [k, k]), ["Personalizada", "custom"]], "Base blanca");

@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from .image_processing import enhance_image_resolution, generate_white_base, resize_to_print_format
-from .screening import screen_channel
+from .screening import BAND_ROWS, screen_channel
 
 PREVIEW_MAX_SIDE = 1600
 PREVIEW_MIN_CELL_PX = 4.0
@@ -54,23 +54,27 @@ def prepare_image(image, alpha, settings):
 def separate_cmyk(bgr, gcr, ink_limit):
     """
     CMYK con GCR y límite de tinta total. Devuelve C, M, Y, K en uint8
-    (255 = 100 % de tinta).
+    (255 = 100 % de tinta). Se procesa por franjas para limitar la memoria.
 
     El gris común se RESTA de C, M, Y. La fórmula (1-R-K)/(1-K) con K reducido
     dejaba C=M=Y=100 % en el negro puro (390 % de tinta).
     """
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-    cmy = 1.0 - rgb
-    k = cmy.min(axis=2) * gcr
-    cmy -= k[..., np.newaxis]
-
-    # Donde C+M+Y+K supera el límite, se reduce C, M, Y proporcionalmente
+    h, w = bgr.shape[:2]
+    channels = {name: np.empty((h, w), dtype=np.uint8) for name in 'CMYK'}
     limit = ink_limit / 100.0
-    reduction = np.clip((limit - k) / np.maximum(cmy.sum(axis=2), 1e-6), 0.0, 1.0)
-    cmy *= reduction[..., np.newaxis]
-
-    to_u8 = lambda a: (np.clip(a, 0, 1) * 255).astype(np.uint8)
-    return {'C': to_u8(cmy[..., 0]), 'M': to_u8(cmy[..., 1]), 'Y': to_u8(cmy[..., 2]), 'K': to_u8(k)}
+    for top in range(0, h, BAND_ROWS):
+        bottom = min(h, top + BAND_ROWS)
+        rgb = cv2.cvtColor(bgr[top:bottom], cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        cmy = 1.0 - rgb
+        k = cmy.min(axis=2) * gcr
+        cmy -= k[..., np.newaxis]
+        # Donde C+M+Y+K supera el límite, se reduce C, M, Y proporcionalmente
+        reduction = np.clip((limit - k) / np.maximum(cmy.sum(axis=2), 1e-6), 0.0, 1.0)
+        cmy *= reduction[..., np.newaxis]
+        for i, name in enumerate('CMY'):
+            channels[name][top:bottom] = (np.clip(cmy[..., i], 0, 1) * 255).astype(np.uint8)
+        channels['K'][top:bottom] = (np.clip(k, 0, 1) * 255).astype(np.uint8)
+    return channels
 
 
 def separate_channels(bgr, alpha, settings, scale=1.0):

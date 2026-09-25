@@ -456,6 +456,21 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
 # == CLASE PRINCIPAL DE LA APLICACIÓN
 # =====================================================================
 
+def print_films(printer, films, dpi):
+    """Dibuja cada película en una página al tamaño físico (px / dpi pulgadas)."""
+    painter = QtGui.QPainter(printer)
+    try:
+        for i, film in enumerate(films):
+            if i:
+                printer.newPage()
+            h, w = film.shape
+            image = QtGui.QImage(np.ascontiguousarray(film).data, w, h, w, QtGui.QImage.Format_Grayscale8)
+            scale = printer.resolution() / dpi
+            painter.drawImage(QtCore.QRectF(0, 0, w * scale, h * scale), image)
+    finally:
+        painter.end()
+
+
 class SimpleHalftoneApp(QtWidgets.QMainWindow):
     
     def __init__(self):
@@ -474,6 +489,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.preview_cache = {}
         self.channel_arrays = {}
         self.preview_scale = 1.0
+        self.dot_gain_curve = []
         self.output_dir = "outputs"
         os.makedirs(self.output_dir, exist_ok=True)
         self.channel_order = ['W', 'Y', 'C', 'M', 'K']
@@ -672,8 +688,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.dot_gain_spin = percent_spin(0, 45, "Cuánto crece un punto del 50 % al imprimir (mídelo con la plantilla). "
                                                   "La trama se compensa para que imprima el tono correcto")
         tone_layout.addWidget(self.dot_gain_spin, 2, 1)
+        self.gain_curve_btn = QtWidgets.QPushButton("Curva medida…")
+        self.gain_curve_btn.setToolTip("Cargar los valores medidos con la plantilla de ganancia")
+        self.gain_curve_btn.clicked.connect(self.edit_gain_curve)
+        tone_layout.addWidget(self.gain_curve_btn, 2, 2)
         self.tone_hint = secondary_label("Referencia textil: punto mínimo 5–10 %, máximo 85–95 %, ganancia 15–30 %.")
-        tone_layout.addWidget(self.tone_hint, 3, 0, 1, 2)
+        tone_layout.addWidget(self.tone_hint, 3, 0, 1, 3)
         controls_layout.addWidget(tone_group)
 
         # === SALIDA ===
@@ -734,6 +754,37 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.garment_color_btn = QtWidgets.QPushButton("Color de la prenda…")
         self.garment_color_btn.clicked.connect(self.select_garment_color)
         format_layout.addWidget(self.garment_color_btn)
+
+        film_grid = QtWidgets.QGridLayout()
+        film_grid.setHorizontalSpacing(10)
+        film_grid.setVerticalSpacing(6)
+        film_grid.setColumnStretch(1, 1)
+        film_grid.addWidget(field_label("Resolución"), 0, 0)
+        self.output_dpi_combo = compact_combo(QtWidgets.QComboBox())
+        self.output_dpi_combo.addItem("Según formato", 0)
+        for dpi in (300, 600, 720, 1200):
+            self.output_dpi_combo.addItem(f"{dpi} dpi", dpi)
+        self.output_dpi_combo.setToolTip("DPI de la impresora de película. Más DPI = más niveles de gris por punto")
+        film_grid.addWidget(self.output_dpi_combo, 0, 1)
+        film_grid.addWidget(field_label("Archivo"), 1, 0)
+        self.output_format_combo = compact_combo(QtWidgets.QComboBox())
+        self.output_format_combo.addItem("PNG", "png")
+        self.output_format_combo.addItem("TIFF 1 bit (RIP)", "tiff")
+        film_grid.addWidget(self.output_format_combo, 1, 1)
+        format_layout.addLayout(film_grid)
+
+        film_options = QtWidgets.QGridLayout()
+        film_options.setHorizontalSpacing(12)
+        self.control_strip_cb = QtWidgets.QCheckBox("Tira de control")
+        self.control_strip_cb.setChecked(True)
+        self.control_strip_cb.setToolTip("Parches 5–95 % en el margen de cada película (requiere guías)")
+        self.mirror_cb = QtWidgets.QCheckBox("Espejo")
+        self.mirror_cb.setToolTip("Invierte la película de izquierda a derecha (emulsión abajo)")
+        self.negative_cb = QtWidgets.QCheckBox("Negativo")
+        film_options.addWidget(self.control_strip_cb, 0, 0)
+        film_options.addWidget(self.mirror_cb, 0, 1)
+        film_options.addWidget(self.negative_cb, 1, 0)
+        format_layout.addLayout(film_options)
         controls_layout.addWidget(format_group)
 
         # === CANALES ===
@@ -914,6 +965,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         export_action = QtWidgets.QAction("Exportar positivos…", self)
         export_action.triggered.connect(self.save_results)
         file_menu.addAction(export_action)
+        print_action = QtWidgets.QAction("Imprimir positivos…", self)
+        print_action.setShortcut("Ctrl+P")
+        print_action.triggered.connect(self.print_positives)
+        file_menu.addAction(print_action)
 
         tools_menu = menu_bar.addMenu("&Herramientas")
         lpi_calc_action = QtWidgets.QAction("Calculadora de LPI…", self)
@@ -922,6 +977,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         troubleshoot_action = QtWidgets.QAction("Solucionador de problemas…", self)
         troubleshoot_action.triggered.connect(self.show_troubleshooter)
         tools_menu.addAction(troubleshoot_action)
+        tools_menu.addSeparator()
+        template_action = QtWidgets.QAction("Plantilla de ganancia de punto…", self)
+        template_action.triggered.connect(self.generate_dot_gain_template)
+        tools_menu.addAction(template_action)
+        curve_action = QtWidgets.QAction("Curva de ganancia medida…", self)
+        curve_action.triggered.connect(self.edit_gain_curve)
+        tools_menu.addAction(curve_action)
 
         # Estado inicial
         self.threshold_slider.setEnabled(False)
@@ -1904,7 +1966,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             min_dot=self.min_dot_spin.value(),
             max_dot=self.max_dot_spin.value(),
             dot_gain=self.dot_gain_spin.value(),
-            dpi=int(print_format["dpi_recommended"]),
+            dot_gain_curve=[list(point) for point in self.dot_gain_curve],
+            dpi=int(self.output_dpi_combo.currentData() or print_format["dpi_recommended"]),
+            output_format=self.output_format_combo.currentData(),
+            mirror=self.mirror_cb.isChecked(),
+            negative=self.negative_cb.isChecked(),
+            control_strip=self.control_strip_cb.isChecked(),
             paper_width_mm=float(print_format["width"]),
             paper_height_mm=float(print_format["height"]),
             fit_to_paper=self.fit_format_cb.isChecked(),
@@ -1941,6 +2008,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.min_dot_spin.setValue(settings.min_dot)
         self.max_dot_spin.setValue(settings.max_dot)
         self.dot_gain_spin.setValue(settings.dot_gain)
+        self.set_gain_curve(settings.dot_gain_curve)
+        dpi_index = self.output_dpi_combo.findData(settings.dpi)
+        self.output_dpi_combo.setCurrentIndex(max(dpi_index, 0))
+        self.output_format_combo.setCurrentIndex(max(self.output_format_combo.findData(settings.output_format), 0))
+        self.mirror_cb.setChecked(settings.mirror)
+        self.negative_cb.setChecked(settings.negative)
+        self.control_strip_cb.setChecked(settings.control_strip)
         for ch, spin in self.density_spins.items():
             spin.setValue(settings.density.get(ch, 100.0))
         self.fit_format_cb.setChecked(settings.fit_to_paper)
@@ -2100,16 +2174,16 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             # Simulación de lo impreso: trama + ganancia de punto de la prensa,
             # o tono continuo si «Ver trama» está desactivado
             settings = self.job_settings()
+            gain = tone_rules.GainModel.from_settings(settings)
             show_screen = self.show_halftones_cb.isChecked()
             for channel in self.channel_order:
                 if channel in channels_to_show:
                     if show_screen:
-                        mask = tone_rules.printed_ink(self.preview_cache[channel], settings.dot_gain,
+                        mask = tone_rules.printed_ink(self.preview_cache[channel], gain,
                                                       settings.cell_px * self.preview_scale)
                     else:
                         film = tone_rules.apply_tone(self.channel_arrays[channel], channel, settings)
-                        mask = tone_rules.printed_from_film(film / 255.0, settings.dot_gain).astype(np.float32) \
-                            if settings.dot_gain > 0 else film.astype(np.float32) / 255.0
+                        mask = gain.printed(film / 255.0).astype(np.float32)
                     mask = mask[:, :, np.newaxis]
                     ink_rgb = np.array(self.channel_colors[channel].getRgbF()[:3], dtype=np.float32)
                     
@@ -2309,67 +2383,94 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         msg_box.exec_()
 
     def generate_dot_gain_template(self):
-        """Generar plantilla de ganancia de punto"""
+        """
+        Guarda la plantilla de ganancia (lineaturas × porcentajes) con la forma
+        de punto y el DPI actuales, junto con sus instrucciones.
+        """
+        settings = self.job_settings()
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Guardar plantilla de ganancia",
+            os.path.join(self.output_dir, f"plantilla_ganancia_{settings.dpi}dpi.png"), "PNG (*.png)")
+        if not path:
+            return
+        output.save_png(path, output.dot_gain_template(settings), settings.dpi)
+        with open(os.path.splitext(path)[0] + "_instrucciones.txt", "w", encoding="utf-8") as f:
+            f.write("PLANTILLA DE GANANCIA DE PUNTO\n\n"
+                    "1. Imprime la plantilla en película al 100 % (sin escalar).\n"
+                    "2. Graba una pantalla con la malla que usarás en producción.\n"
+                    "3. Estampa sobre la tela real con la tinta, racleta y presión de producción.\n"
+                    "4. Con lupa o cuentahílos, estima el porcentaje impreso de cada parche en la fila\n"
+                    "   de tu lineatura (por ejemplo, el 50 % de la película imprime 70 %).\n"
+                    "5. En la app: Herramientas → Curva de ganancia medida…, anota los valores.\n"
+                    "   La trama se compensará para que el tono impreso sea el del diseño.\n")
+        self.status_bar.showMessage(f"Plantilla guardada: {os.path.basename(path)}", 10000)
+
+    GAIN_CURVE_TONES = (10, 20, 30, 40, 50, 60, 70, 80, 90)
+
+    def set_gain_curve(self, curve):
+        self.dot_gain_curve = [list(point) for point in curve]
+        active = bool(self.dot_gain_curve)
+        self.dot_gain_spin.setEnabled(not active)
+        self.gain_curve_btn.setText(f"Curva ({len(self.dot_gain_curve)} pts)" if active else "Curva medida…")
+        self.schedule_rescreen()
+
+    def edit_gain_curve(self):
+        """Tabla para anotar el % impreso medido de cada % de película."""
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Curva de ganancia medida")
+        layout = QtWidgets.QVBoxLayout(dialog)
+        intro = QtWidgets.QLabel("Anota el porcentaje que imprimió cada parche de la plantilla, "
+                                 "en la fila de tu lineatura. Deja 0 en los que no mediste.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        form = QtWidgets.QFormLayout()
+        current = {round(f): p for f, p in self.dot_gain_curve}
+        spins = {}
+        for tone_value in self.GAIN_CURVE_TONES:
+            spin = QtWidgets.QDoubleSpinBox()
+            spin.setRange(0, 100)
+            spin.setDecimals(0)
+            spin.setSuffix(" %")
+            spin.setValue(current.get(tone_value, 0))
+            form.addRow(f"Película {tone_value} % imprime", spin)
+            spins[tone_value] = spin
+        layout.addLayout(form)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Save | QtWidgets.QDialogButtonBox.Cancel)
+        clear_btn = buttons.addButton("Borrar curva", QtWidgets.QDialogButtonBox.ResetRole)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        clear_btn.clicked.connect(lambda: [spin.setValue(0) for spin in spins.values()])
+        layout.addWidget(buttons)
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            self.set_gain_curve([[t, spin.value()] for t, spin in spins.items() if spin.value() > 0])
+
+    def print_positives(self):
+        """
+        Imprime cada positivo en una página, a su tamaño físico real. La trama
+        la calcula la app, así que sirve también en impresoras sin PostScript.
+        """
+        if self.image is None or not self.preview_cache:
+            QtWidgets.QMessageBox.warning(self, "Nada que imprimir",
+                                          "Abre una imagen y pulsa «Separar colores» antes de imprimir.")
+            return
+        from PyQt5 import QtPrintSupport
+        printer = QtPrintSupport.QPrinter(QtPrintSupport.QPrinter.HighResolution)
+        dialog = QtPrintSupport.QPrintDialog(printer, self)
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
-            # Crear imagen de plantilla simple
-            template_size = 800
-            template_img = np.ones((template_size, template_size), dtype=np.uint8) * 255
+            pages = self.render_positives()
+            print_films(printer, pages, self.job_settings().dpi)
+            self.status_bar.showMessage(f"Enviados {len(pages)} positivos a la impresora", 10000)
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
-            # Generar matriz de prueba
-            lpi_values = [30, 40, 50, 60]
-            percent_values = [20, 40, 60, 80]
-            cell_size = 150
-
-            print("🎯 Generando plantilla de ganancia de punto...")
-
-            for i, percent in enumerate(percent_values):
-                for j, lpi in enumerate(lpi_values):
-                    x_start = 50 + j * cell_size
-                    y_start = 50 + i * cell_size
-
-                    # Crear celda de prueba
-                    test_value = int((percent / 100.0) * 255)
-                    test_cell = np.full((cell_size, cell_size), test_value, dtype=np.uint8)
-
-                    # Misma trama que los positivos: celda = 300 dpi / LPI
-                    halftoned_cell = halftone(test_cell, 300 / lpi, 'circle', 0)
-
-                    # Colocar en plantilla
-                    template_img[y_start:y_start+cell_size, x_start:x_start+cell_size] = halftoned_cell
-
-            # Guardar plantilla
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"plantilla_ganancia_{timestamp}.png"
-            filepath = os.path.join(self.output_dir, filename)
-            output.save_png(filepath, template_img, 300)
-
-            # Crear archivo de instrucciones
-            info_filename = f"instrucciones_ganancia_{timestamp}.txt"
-            info_filepath = os.path.join(self.output_dir, info_filename)
-
-            with open(info_filepath, 'w', encoding='utf-8') as f:
-                f.write("PLANTILLA DE VERIFICACIÓN DE GANANCIA DE PUNTO\n")
-                f.write("=" * 50 + "\n\n")
-                f.write("INSTRUCCIONES:\n")
-                f.write("1. Imprime esta plantilla\n")
-                f.write("2. Graba la malla\n")
-                f.write("3. Estampa en tela blanca\n")
-                f.write("4. Compara con lupa los resultados\n")
-                f.write("5. Ajusta tu proceso según diferencias\n\n")
-                f.write(f"MATRIZ: LPI {lpi_values} x Porcentajes {percent_values}\n")
-                f.write(f"FORMA DE PUNTO: Redonda (estándar)\n")
-                f.write(f"FORMAS DISPONIBLES EN LA APLICACIÓN:\n")
-                f.write("• Redonda: Punto circular clásico\n")
-                f.write("• Elipse: Punto ovalado horizontal\n")
-                f.write("• Diamante: Punto en forma de rombo\n")
-                f.write("• Lineal: Efecto de líneas paralelas\n")
-
-            msg = f"✅ Plantilla generada:\n{filename}\n{info_filename}\n\nUbicación: {self.output_dir}"
-            QtWidgets.QMessageBox.information(self, "Plantilla Generada", msg)
-            self.status_bar.showMessage(f"✅ Plantilla generada: {filename}", 5000)
-
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Error al generar plantilla:\n{str(e)}")
+    def render_positives(self):
+        """Positivos finales a resolución completa, en orden de impresión."""
+        settings = self.job_settings()
+        _, screens, _ = render(self.image, self.image_alpha, settings, preview=False)
+        return [output.finish_positive(screens[ch], ch, settings) for ch in settings.channels()]
 
 
     def find_nearest_non_multiple(self, target_lpi, mesh_count):
@@ -2602,9 +2703,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             for channel in settings.channels():
                 screen = screens[channel]
                 positive = output.finish_positive(screen, channel, settings)
-                filename = f"POSITIVO_{channel}_{timestamp}.png"
-                output.save_png(os.path.join(folder_path, filename), positive, settings.dpi)
-                saved_files.append(filename)
+                path = output.save_positive(os.path.join(folder_path, f"POSITIVO_{channel}_{timestamp}"),
+                                            positive, settings)
+                saved_files.append(os.path.basename(path))
                 positives.append(positive)
                 clean_pages.append(output.place_on_paper(screen, settings) if settings.fit_to_paper else screen)
 

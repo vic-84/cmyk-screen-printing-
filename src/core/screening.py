@@ -63,40 +63,42 @@ def _spot_calibration(shape):
     return max_value, table.astype(np.float32)
 
 
+BAND_ROWS = 512
+
+
 def halftone(channel, cell_px, shape='circle', angle=0.0):
     """
     Trama un canal de tinta (uint8, 255 = 100 % de tinta).
 
     cell_px: tamaño de la celda en píxeles (DPI / LPI). Se usa en float para
-    que el LPI real coincida con el pedido.
+    que el LPI real coincida con el pedido. Se procesa por franjas de filas
+    para que un A3 a 1200 dpi (≈ 277 Mpx) no agote la memoria.
     """
     h, w = channel.shape
-    # float32: a tamaño de impresión (A3 @ 300 dpi ≈ 17 Mpx) float64 duplica la RAM
-    x, y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    out = np.empty((h, w), dtype=np.uint8)
+    max_value, table = _spot_calibration(shape)
+    scale_index = (CALIBRATION_BINS - 1) / max_value
 
     angle_rad = np.radians(angle)
     cos_a, sin_a = np.float32(np.cos(angle_rad)), np.float32(np.sin(angle_rad))
-    x_rot = x * cos_a + y * sin_a
-    y_rot = -x * sin_a + y * cos_a
-    del x, y
+    xs = np.arange(w, dtype=np.float32)
 
-    # Posición dentro de la celda normalizada a -0.5 .. 0.5
-    dx = (x_rot % cell_px) / cell_px - 0.5
-    dy = (y_rot % cell_px) / cell_px - 0.5
-    del x_rot, y_rot
-
-    spot = _spot_function(dx, dy, 0.5, shape)
-    del dx, dy
-    max_value, table = _spot_calibration(shape)
-    # Percentil del valor dentro de la celda: 0 en el centro, 1 en el borde
-    index = np.clip(spot * ((CALIBRATION_BINS - 1) / max_value), 0, CALIBRATION_BINS - 1).astype(np.int32)
-    del spot
-    pattern = table[index]
-    del index
-
-    ink_level = channel.astype(np.float32) / 255.0
-    ink = (ink_level > pattern) | (ink_level >= 1.0)
-    return np.where(ink, 0, 255).astype(np.uint8)
+    for top in range(0, h, BAND_ROWS):
+        bottom = min(h, top + BAND_ROWS)
+        x, y = np.meshgrid(xs, np.arange(top, bottom, dtype=np.float32))
+        x_rot = x * cos_a + y * sin_a
+        y_rot = -x * sin_a + y * cos_a
+        # Posición dentro de la celda normalizada a -0.5 .. 0.5
+        dx = (x_rot % cell_px) / cell_px - 0.5
+        dy = (y_rot % cell_px) / cell_px - 0.5
+        spot = _spot_function(dx, dy, 0.5, shape)
+        # Percentil del valor dentro de la celda: 0 en el centro, 1 en el borde
+        index = np.clip(spot * scale_index, 0, CALIBRATION_BINS - 1).astype(np.int32)
+        pattern = table[index]
+        ink_level = channel[top:bottom].astype(np.float32) / 255.0
+        ink = (ink_level > pattern) | (ink_level >= 1.0)
+        out[top:bottom] = np.where(ink, 0, 255)
+    return out
 
 
 def screen_channel(channel, name, settings, scale=1.0):

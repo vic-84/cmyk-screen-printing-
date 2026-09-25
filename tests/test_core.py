@@ -256,6 +256,60 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(window.angle_preset_combo.currentText(), "Personalizado")
         window.close()
 
+    def test_measured_gain_curve_is_compensated(self):
+        model = tone.GainModel(curve=[[25, 40], [50, 70], [75, 88]])
+        self.assertAlmostEqual(float(model.printed(0.5)), 0.70)
+        self.assertAlmostEqual(float(model.film(0.70)), 0.5)
+        settings = JobSettings(dot_gain_curve=[[50, 70]])
+        lut = tone.tone_lut(gain=tone.GainModel.from_settings(settings))
+        self.assertLess(lut[178], 178)  # un 70 % pedido va a la película más claro
+
+    def test_film_options_mirror_negative_and_tiff(self):
+        settings = JobSettings(mirror=True, negative=True, output_format="tiff", dpi=600)
+        screen = np.full((40, 60), 255, dtype=np.uint8)
+        screen[:, :10] = 0
+
+        film = output.finish_positive(screen, "K", settings)
+
+        self.assertTrue((film[:, -10:] == 255).all())   # espejo + negativo
+        self.assertTrue((film[:, :50] == 0).all())
+        with tempfile.TemporaryDirectory() as folder:
+            path = output.save_positive(os.path.join(folder, "K"), film, settings)
+            with Image.open(path) as im:
+                self.assertEqual(im.mode, "1")
+                self.assertAlmostEqual(im.info["dpi"][0], 600, places=0)
+
+    def test_films_carry_a_control_strip_in_the_margin(self):
+        settings = JobSettings(fit_to_paper=True, registration_guides=True, control_strip=True,
+                               paper_width_mm=150, paper_height_mm=100)
+        blank = np.full(settings.paper_px[::-1], 255, dtype=np.uint8)
+        with_strip = output.finish_positive(blank, "C", settings)
+        settings.control_strip = False
+        without = output.finish_positive(blank, "C", settings)
+
+        margin = int(settings.guide_margin_mm / 25.4 * settings.dpi)
+        bottom = slice(margin + settings.paper_px[1] + 2, None)
+        self.assertGreater((with_strip[bottom] == 0).sum(), (without[bottom] == 0).sum() * 3)
+
+    def test_dot_gain_template_has_one_patch_per_lpi_and_tone(self):
+        template = output.dot_gain_template(JobSettings(dpi=300), lpis=(20, 40), tones=(10, 50, 90))
+        self.assertGreater(template.shape[0], 0)
+        self.assertLess((template == 0).mean(), 0.6)
+
+    def test_print_films_writes_one_page_per_film(self):
+        from PyQt5 import QtPrintSupport
+        from src.ui.main_window import print_films
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "positivos.pdf")
+            printer = QtPrintSupport.QPrinter(QtPrintSupport.QPrinter.HighResolution)
+            printer.setOutputFormat(QtPrintSupport.QPrinter.PdfFormat)
+            printer.setOutputFileName(path)
+            films = [np.full((300, 200), 255, np.uint8), np.zeros((300, 200), np.uint8)]
+            print_films(printer, films, 300)
+            with open(path, "rb") as f:
+                pdf = f.read()
+        self.assertEqual(pdf.count(b"/Type /Page\n") + pdf.count(b"/Type /Page\r") + pdf.count(b"/Type /Page "), 2)
+
     def test_rotate_image_preserves_color_images(self):
         image = np.zeros((20, 30, 3), dtype=np.uint8)
         image[5:15, 10:20] = (10, 20, 30)

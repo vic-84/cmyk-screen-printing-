@@ -80,16 +80,17 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
 - **Ajustes al instante**: los cambios de tono, forma, ángulos y LPI vuelven a tramar la vista previa sin repetir la separación.
 - Pruebas: 23.
 
-### Fase 3: Salida de fotolitos
-- **Plantilla de ganancia de punto**: rejilla de LPI (10–60) × carga (10–90 %) para imprimir, grabar, estampar y comparar con lupa. Los resultados se capturan en la app y generan la curva de la fase 2.
+### Fase 3: Salida de fotolitos *(hecha)*
+- **Plantilla de ganancia de punto** (Herramientas): 9 lineaturas (20–60 LPI) × 11 porcentajes (5–95 %), con la forma y el DPI del trabajo, más un archivo de instrucciones.
+- **Curva de ganancia medida** (Herramientas o botón en Tono): se anota el % impreso de cada % de película y la trama se compensa con esa curva. Reemplaza el valor único al 50 %.
 - **Cada película** lleva:
-  - cruces de registro
-  - nombre y color del canal
-  - número de orden
-  - LPI y ángulo
-  - tira de control 5–95 %
-- Opciones de salida: **TIFF 1 bit** con DPI, **espejo**, positivo/negativo y **DPI de salida** seleccionable (300/600/720/1200).
-- **Impresión directa** (QPrinter), con la trama ya calculada por la app para impresoras sin PostScript.
+  - cruces de registro y marcas de centro
+  - etiqueta con orden, canal, LPI, ángulo y DPI
+  - **tira de control** 5/10/25/50/75/90/95 % tramada igual que el canal
+- **Resolución de salida**: según formato, 300, 600, 720 o 1200 dpi. La trama y la separación se procesan por franjas para que los tamaños grandes quepan en memoria; un canal A3 a 300 dpi pasó de 2 s a 0.7 s.
+- **Formato**: PNG o **TIFF 1 bit** (CCITT G4), ambos con DPI incrustado. Opciones **espejo** y **negativo**.
+- **Impresión directa** (Archivo → Imprimir, Ctrl+P): una página por película a tamaño físico real; la app hace la trama, así que funciona sin PostScript.
+- Pruebas: 28.
 
 ### Fase 4: Color plano (spot)
 - **Detección de colores** (agrupamiento en espacio Lab) con paleta editable: unir, quitar y asignar tinta.

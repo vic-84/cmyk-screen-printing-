@@ -15,6 +15,7 @@ from ..utils.constants import (
 )
 
 PROCESS_CHANNELS = ('C', 'M', 'Y', 'K')
+CHANNEL_NAMES = {'C': 'Cian', 'M': 'Magenta', 'Y': 'Amarillo', 'K': 'Negro', 'W': 'Base blanca'}
 MONO_CHANNELS = ('K',)
 NEUTRAL_THRESHOLD = 128
 
@@ -36,9 +37,14 @@ class JobSettings:
     min_dot: float = 0.0
     max_dot: float = 100.0
     dot_gain: float = 0.0                # ganancia medida a 50 %, en puntos
+    dot_gain_curve: list = field(default_factory=list)  # [[película %, impreso %], ...]
 
     # Salida
     dpi: int = 300
+    output_format: str = 'png'           # png | tiff (1 bit)
+    mirror: bool = False                 # espejo (emulsión abajo)
+    negative: bool = False
+    control_strip: bool = True           # tira 5-95 % en el margen (requiere guías)
     paper_width_mm: float = 210.0
     paper_height_mm: float = 297.0
     fit_to_paper: bool = False
@@ -78,6 +84,9 @@ class JobSettings:
         base = MONO_CHANNELS if self.mode == 'mono' else PROCESS_CHANNELS
         active = set(base) | ({'W'} if self.white_base else set())
         return [c for c in self.channel_order if c in active]
+
+    def channel_name(self, channel):
+        return CHANNEL_NAMES.get(channel, channel)
 
     def to_dict(self):
         return asdict(self)

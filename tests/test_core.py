@@ -920,6 +920,32 @@ class CoreTests(unittest.TestCase):
         window.close()
         other.close()
 
+    def test_print_order_moves_like_layers_and_changes_the_simulation(self):
+        window = SimpleHalftoneApp()
+        window._set_loaded_image(np.dstack([np.full((60, 60), v, np.uint8) for v in (40, 160, 220)]))
+        window.white_base_cb.setChecked(True)
+        window.ink_type_combo.setCurrentText("Plastisol cubriente")
+        window.process_cmyk()
+        rows = lambda: [window.channel_list.item(i).text() for i in range(window.channel_list.count())]
+        self.assertEqual(rows(), ["W", "Y", "C", "M", "K"])
+        before = window.preview_label.original_pixmap.toImage()
+        window.channel_list.setCurrentRow(rows().index("K"))
+        window.move_channel(-1)
+        window.move_channel(-1)
+        self.assertEqual(rows(), ["W", "Y", "K", "C", "M"])
+        self.assertEqual(window.job_settings().channels(), ["W", "Y", "K", "C", "M"])
+        self.assertEqual(window.current_channel, "K")              # la selección sigue al canal
+        self.assertNotEqual(window.preview_label.original_pixmap.toImage(), before)   # la simulación cambió
+        # La base no se mueve ni se le pasa por encima
+        window.channel_list.setCurrentRow(1)
+        window.move_channel(-1)
+        self.assertEqual(rows()[0], "W")
+        self.assertFalse(window.move_up_btn.isEnabled() and window.current_channel == "W")
+        # El orden llega a las películas (etiqueta «n/5»)
+        from src.core.output import channel_label
+        self.assertTrue(channel_label("K", window.job_settings()).startswith("3/5"))
+        window.close()
+
     def test_gray_base_is_named_and_simulated_with_its_color(self):
         red = [220, 30, 30]
         spots = [{"id": "S1", "name": "Rojo", "rgb": red, "halftone": False, "opaque": False, "base": True}]

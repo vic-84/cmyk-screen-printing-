@@ -1076,8 +1076,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         channels_tab_layout.setContentsMargins(8, 8, 8, 8)
 
         channels_tab_layout.addWidget(secondary_label(
-            "Orden de impresión de arriba abajo. Arrastra para cambiarlo; "
-            "selecciona un canal para ajustar su umbral."))
+            "Orden de impresión de arriba abajo: ▲ ▼ o arrastra para cambiarlo. "
+            "Selecciona un canal para su umbral y su curva; doble clic para su color."))
 
         self.channel_list = DraggableChannelList(self)
         self.channel_list.setItemDelegate(
@@ -1091,7 +1091,30 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.channel_list.orderChanged.connect(self.set_channel_order)
         self.channel_list.itemSelectionChanged.connect(self.on_channel_selection_changed)
         self.channel_list.setFixedHeight(ChannelScreenDelegate.ROW_HEIGHT * 5 + 4)
-        channels_tab_layout.addWidget(self.channel_list)
+        self.channel_list.itemDoubleClicked.connect(lambda item: self.pick_channel_color(item.text()))
+        # Orden de impresión como capas: la de arriba se imprime primero
+        list_row = QtWidgets.QHBoxLayout()
+        list_row.setSpacing(6)
+        list_row.addWidget(self.channel_list, 1)
+        order_buttons = QtWidgets.QVBoxLayout()
+        order_buttons.setSpacing(4)
+        self.move_up_btn = QtWidgets.QPushButton("▲")
+        self.move_up_btn.setToolTip("Imprimir este color antes (sube en el orden)")
+        self.move_down_btn = QtWidgets.QPushButton("▼")
+        self.move_down_btn.setToolTip("Imprimir este color después (baja en el orden)")
+        self.color_btn = QtWidgets.QPushButton("Color")
+        self.color_btn.setToolTip("Cambiar el color de la tinta de este canal (también con doble clic)")
+        for button in (self.move_up_btn, self.move_down_btn, self.color_btn):
+            button.setFixedWidth(60)
+            button.setStyleSheet("QPushButton { padding: 4px 2px; }")
+            button.setEnabled(False)
+            order_buttons.addWidget(button)
+        order_buttons.addStretch(1)
+        self.move_up_btn.clicked.connect(lambda: self.move_channel(-1))
+        self.move_down_btn.clicked.connect(lambda: self.move_channel(1))
+        self.color_btn.clicked.connect(lambda: self.current_channel and self.pick_channel_color(self.current_channel))
+        list_row.addLayout(order_buttons)
+        channels_tab_layout.addLayout(list_row)
 
         self.view_individual_channel_cb = QtWidgets.QCheckBox("Ver solo el canal seleccionado")
         self.view_individual_channel_cb.stateChanged.connect(self.update_preview)
@@ -1487,7 +1510,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.channel_list.clear()
         for ch in self.list_channels():
             item = QtWidgets.QListWidgetItem(ch)
-            item.setToolTip(f"{self.channel_display_name(ch)}: arrastra para cambiar el orden de impresión")
+            item.setToolTip(f"{self.channel_display_name(ch)}: arrastra o usa ▲ ▼ para cambiar el orden de "
+                            "impresión; doble clic para cambiar su color")
             self.channel_list.addItem(item)
         self.channel_list.blockSignals(False)
 
@@ -1595,7 +1619,27 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         """Actualiza el orden (conserva los canales de otras técnicas) y refresca la vista."""
         hidden = [c for c in self.channel_order if c not in new_order]
         self.channel_order = list(new_order) + hidden
+        # La lista muestra el orden real (la base siempre va primero)
+        selected = self.current_channel
+        self.update_channel_list_ui()
+        if selected:
+            for i in range(self.channel_list.count()):
+                if self.channel_list.item(i).text() == selected:
+                    self.channel_list.setCurrentRow(i)
         self.update_preview()
+
+    def move_channel(self, step):
+        """Sube (−1) o baja (+1) el canal seleccionado en el orden de impresión."""
+        channel = self.current_channel
+        order = [self.channel_list.item(i).text() for i in range(self.channel_list.count())]
+        if channel not in order or channel == 'W':
+            return
+        i = order.index(channel)
+        j = i + step
+        if j < 0 or j >= len(order) or order[j] == 'W':
+            return
+        order[i], order[j] = order[j], order[i]
+        self.set_channel_order(order)
 
     def channel_angle_for_list(self, channel):
         if channel in getattr(self, 'angle_spins', {}):
@@ -2248,7 +2292,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
     def pick_channel_color(self, channel):
         """Abre el diálogo de color y actualiza el color de simulación del canal."""
-        color = QtWidgets.QColorDialog.getColor(self.channel_colors[channel], self)
+        if channel not in self.channel_colors:
+            return
+        color = QtWidgets.QColorDialog.getColor(self.channel_colors[channel], self,
+                                                f"Color de {self.channel_display_name(channel).lower()}")
         if color.isValid():
             self.channel_colors[channel] = color
             self.update_all_color_buttons_ui()
@@ -2636,6 +2683,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         
         self.threshold_slider.setEnabled(is_single_selection)
         self.view_individual_channel_cb.setEnabled(is_single_selection)
+        movable = is_single_selection and selected_items[0].text() != 'W'
+        self.move_up_btn.setEnabled(movable)
+        self.move_down_btn.setEnabled(movable)
+        self.color_btn.setEnabled(is_single_selection)
 
         if is_single_selection:
             self.current_channel = selected_items[0].text()

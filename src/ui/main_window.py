@@ -603,6 +603,30 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         image_buttons.addWidget(self.wizard_btn)
         image_layout.addLayout(image_buttons)
 
+        quality_grid = QtWidgets.QGridLayout()
+        quality_grid.setHorizontalSpacing(10)
+        quality_grid.setColumnStretch(1, 1)
+        quality_grid.addWidget(field_label("Limpiar ruido"), 0, 0)
+        self.denoise_combo = compact_combo(QtWidgets.QComboBox())
+        for label, value in (("No", "off"), ("Suave", "light"), ("Fuerte", "strong")):
+            self.denoise_combo.addItem(label, value)
+        self.denoise_combo.setToolTip("Quita ruido y halos de compresión JPEG antes de separar "
+                                      "(en color plano evita motas y bordes sucios)")
+        quality_grid.addWidget(self.denoise_combo, 0, 1)
+        quality_grid.addWidget(field_label("Enfoque"), 1, 0)
+        self.sharpen_spin = QtWidgets.QDoubleSpinBox()
+        self.sharpen_spin.setRange(0, 150)
+        self.sharpen_spin.setDecimals(0)
+        self.sharpen_spin.setSuffix(" %")
+        self.sharpen_spin.setToolTip("Máscara de enfoque tras ampliar: recupera nitidez en fotos de poca resolución")
+        quality_grid.addWidget(self.sharpen_spin, 1, 1)
+        self.smooth_edges_cb = QtWidgets.QCheckBox("Suavizar bordes de tintas sólidas")
+        self.smooth_edges_cb.setChecked(True)
+        self.smooth_edges_cb.setToolTip("Al ampliar una imagen chica, quita los escalones de los bordes "
+                                        "sin crear solapes ni huecos entre tintas")
+        quality_grid.addWidget(self.smooth_edges_cb, 2, 0, 1, 2)
+        image_layout.addLayout(quality_grid)
+
         self.image_res_label = secondary_label("Ninguna imagen abierta")
         image_layout.addWidget(self.image_res_label)
         self.complexity_label = secondary_label("")
@@ -833,6 +857,16 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.ink_type_combo.setToolTip("Opacidad de la tinta en la simulación: la transparente filtra el color de abajo")
         self.ink_type_combo.currentTextChanged.connect(lambda *_: self.update_preview())
         substrate_layout.addWidget(self.ink_type_combo, 1, 1)
+        substrate_layout.addWidget(field_label("Base"), 3, 0)
+        self.base_combo = compact_combo(QtWidgets.QComboBox())
+        for name, rgb in BASE_PRESETS.items():
+            self.base_combo.addItem(name, rgb)
+        self.base_combo.addItem("Personalizada…", None)
+        self.base_combo.setToolTip("Blanca: color más brillante en prenda oscura. Gris: cubre con menos tinta y "
+                                   "tacto más suave. Gris bloqueadora: frena la migración del teñido en poliéster")
+        self.base_combo.activated.connect(self.on_base_changed)
+        substrate_layout.addWidget(self.base_combo, 3, 1)
+        self.base_rgb = list(BASE_PRESETS["Base blanca"])
         substrate_layout.addWidget(field_label("Límite de tinta"), 2, 0)
         self.ink_limit_spin = QtWidgets.QDoubleSpinBox()
         self.ink_limit_spin.setRange(100, 400)
@@ -1226,6 +1260,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             control.currentIndexChanged.connect(self.on_icc_profile_changed)
         self.icc_bpc_cb.stateChanged.connect(self.on_icc_profile_changed)
         self.icc_limit_cb.stateChanged.connect(self.schedule_reseparation)
+        self.denoise_combo.currentIndexChanged.connect(self.schedule_reseparation)
+        self.sharpen_spin.valueChanged.connect(self.schedule_reseparation)
+        self.smooth_edges_cb.stateChanged.connect(self.schedule_reseparation)
         self.input_profile_combo.currentIndexChanged.connect(self.on_input_profile_changed)
         self.lpi_combo.currentTextChanged.connect(lambda *_: self.update_resolution_advice())
         self.fit_format_cb.stateChanged.connect(lambda *_: self.update_resolution_advice())
@@ -1448,7 +1485,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
     def channel_display_name(self, channel):
         spot = next((sp for sp in self.spot_colors if sp['id'] == channel), None)
-        return spot['name'] if spot else CHANNEL_NAMES.get(channel, channel)
+        if spot:
+            return spot['name']
+        if channel == 'W' and hasattr(self, 'base_combo'):
+            return self.current_base_name()
+        return CHANNEL_NAMES.get(channel, channel)
 
     def select_garment_color(self):
         """Permite al usuario seleccionar el color de fondo para la simulación."""
@@ -1560,6 +1601,33 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "Error de Carga", f"No se pudo encontrar el archivo de base de datos: {os.path.basename(e.filename)}\nAsegúrate de que la carpeta 'data' exista y contenga los archivos .json.")
         except json.JSONDecodeError as e:
             QtWidgets.QMessageBox.critical(self, "Error de Carga", f"Error de formato en el archivo JSON: {e}")
+
+    # ------------------------------------------------------------ base
+
+    def current_base_name(self):
+        data = self.base_combo.currentData()
+        if data is None:
+            return f"Base {QtGui.QColor(*self.base_rgb).name().upper()}"
+        return self.base_combo.currentText()
+
+    def set_base(self, name, rgb):
+        """Selecciona la base por nombre (o la deja personalizada con su color)."""
+        self.base_rgb = [int(v) for v in rgb]
+        index = self.base_combo.findText(name)
+        self.base_combo.setCurrentIndex(index if index >= 0 else self.base_combo.count() - 1)
+        self.channel_colors['W'] = QtGui.QColor(*self.base_rgb)
+        self.channel_list.viewport().update()
+        self.update_all_color_buttons_ui()
+
+    def on_base_changed(self, *_):
+        rgb = self.base_combo.currentData()
+        if rgb is None:
+            color = QtWidgets.QColorDialog.getColor(QtGui.QColor(*self.base_rgb), self, "Color de la base")
+            if not color.isValid():
+                return
+            rgb = list(color.getRgb()[:3])
+        self.set_base(self.base_combo.currentText(), rgb)
+        self.update_preview()
 
     # ------------------------------------------------------------ gestión de color
 
@@ -2340,6 +2408,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             paper_height_mm=float(print_format["height"]),
             fit_to_paper=self.fit_format_cb.isChecked(),
             registration_guides=self.guides_cb.isChecked(),
+            denoise=self.denoise_combo.currentData(),
+            sharpen=self.sharpen_spin.value(),
+            smooth_edges=self.smooth_edges_cb.isChecked(),
+            base_name=self.current_base_name(),
+            base_rgb=list(self.base_rgb),
             resolution_factor=resolution.get("factor", 1.0),
             resolution_method=resolution.get("method"),
             white_base=self.white_base_cb.isChecked(),
@@ -2395,6 +2468,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.mirror_cb.setChecked(settings.mirror)
         self.negative_cb.setChecked(settings.negative)
         self.control_strip_cb.setChecked(settings.control_strip)
+        self.denoise_combo.setCurrentIndex(max(self.denoise_combo.findData(settings.denoise), 0))
+        self.sharpen_spin.setValue(settings.sharpen)
+        self.smooth_edges_cb.setChecked(settings.smooth_edges)
+        self.set_base(settings.base_name, settings.base_rgb)
         self.ink_limit_spin.setValue(settings.ink_limit)
         self.select_icc_profile(settings.icc_profile)
         self.icc_intent_combo.setCurrentText(settings.icc_intent)
@@ -2609,6 +2686,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.garment_color = QtGui.QColor(*profile["garment"])
         self.garment_color_btn.setText(f"Color de la prenda: {self.garment_color.name().upper()}")
         self.white_base_cb.setChecked(profile["white_base"])
+        base = profile.get("base", "Base blanca")
+        self.set_base(base, BASE_PRESETS[base])
         self.ink_limit_spin.setValue(profile["ink_limit"])
         self.min_dot_spin.setValue(profile["min_dot"])
         self.max_dot_spin.setValue(profile["max_dot"])

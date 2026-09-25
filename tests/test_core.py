@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -579,6 +580,75 @@ class CoreTests(unittest.TestCase):
         report = sim.quality_report(kept, raw)["thin"]["S1"]
         self.assertEqual(report["specks"], 3)          # malla 120: mínimo 0.32 mm = 3.75 px
         self.assertLess(report["lines"], 0.005)        # el trazo grueso no cuenta como línea fina
+
+    def test_gray_base_is_named_and_simulated_with_its_color(self):
+        red = [220, 30, 30]
+        spots = [{"id": "S1", "name": "Rojo", "rgb": red, "halftone": False, "opaque": False, "base": True}]
+        image = np.zeros((30, 30, 3), dtype=np.uint8)
+        image[:] = red[::-1]
+        results = {}
+        for name, rgb in (("Base blanca", [255, 255, 255]), ("Base gris", [150, 150, 150])):
+            settings = JobSettings(mode="spot", garment_rgb=[0, 0, 0], spot_colors=spots, white_base=True,
+                                   white_base_choke_px=0, base_name=name, base_rgb=rgb)
+            channels, screens, _ = render(image, None, settings)
+            results[name] = sim.simulate(channels, screens, settings, {"S1": red, "W": rgb}, [0, 0, 0])
+            self.assertEqual(settings.channel_name("W"), name)
+        # Tinta transparente: sobre base gris queda más oscura que sobre base blanca
+        self.assertGreater(results["Base blanca"][..., 0].mean(), results["Base gris"][..., 0].mean() + 40)
+
+    def test_edge_smoothing_removes_steps_without_overlaps_or_gaps(self):
+        # Imagen chica con diagonal en escalones, ampliada 6×: dos tintas que se tocan
+        small = np.zeros((20, 20, 3), dtype=np.uint8)
+        small[:] = (30, 30, 200)                     # rojo (BGR)
+        small[np.tril_indices(20)] = (20, 20, 20)    # negro bajo la diagonal
+        spots = [{"id": "S1", "name": "Negro", "rgb": [20, 20, 20], "halftone": False},
+                 {"id": "S2", "name": "Rojo", "rgb": [200, 30, 30], "halftone": False}]
+        base = dict(mode="spot", garment_rgb=[255, 255, 255], spot_colors=spots, resolution_factor=6.0,
+                    resolution_method="INTER_NEAREST", despeckle_mm=0)
+        steps = render(small, None, JobSettings(smooth_edges=False, **base))[0]
+        smooth = render(small, None, JobSettings(smooth_edges=True, **base))[0]
+        black_steps, black_smooth = steps["S1"] >= 128, smooth["S1"] >= 128
+        both = black_smooth & (smooth["S2"] >= 128)
+        neither = ~black_smooth & ~(smooth["S2"] >= 128)
+        self.assertFalse(both.any())                 # sin solapes
+        self.assertFalse(neither.any())              # sin huecos: toda la imagen es tinta
+        self.assertAlmostEqual(black_smooth.mean(), black_steps.mean(), delta=0.03)
+        # Desviación del borde respecto a la diagonal ideal: la escalera oscila ±3 px
+        def wobble(mask):
+            rows = np.arange(10, mask.shape[0] - 10)
+            boundary = mask[rows].sum(axis=1).astype(float)
+            fit = np.polyval(np.polyfit(rows, boundary, 1), rows)
+            return float(np.std(boundary - fit))
+        self.assertLess(wobble(black_smooth), wobble(black_steps) * 0.6)
+
+    def test_denoise_removes_jpeg_specks_and_sharpen_adds_contrast(self):
+        from src.core import enhance
+        rng = np.random.default_rng(3)
+        flat = np.full((80, 80, 3), 200, dtype=np.uint8)
+        noisy = np.clip(flat.astype(int) + rng.normal(0, 12, flat.shape), 0, 255).astype(np.uint8)
+        self.assertLess(enhance.denoise(noisy, "light").std(), noisy.std() * 0.6)
+        self.assertIs(enhance.denoise(noisy, "off"), noisy)
+        edge = np.zeros((20, 40, 3), dtype=np.uint8)
+        edge[:, 20:] = 200
+        edge = cv2.GaussianBlur(edge, (0, 0), 2)
+        sharpened = enhance.sharpen(edge, 100)
+        self.assertGreater(np.abs(np.diff(sharpened[10, :, 0].astype(int))).max(),
+                           np.abs(np.diff(edge[10, :, 0].astype(int))).max())
+
+    def test_base_presets_and_substrate_in_the_window(self):
+        window = SimpleHalftoneApp()
+        window.substrate_combo.setCurrentText("Poliéster oscuro")
+        settings = window.job_settings()
+        self.assertEqual(settings.base_name, "Base gris bloqueadora")
+        self.assertEqual(settings.channel_name("W"), "Base gris bloqueadora")
+        self.assertTrue(settings.white_base)
+        window.base_combo.setCurrentIndex(window.base_combo.findText("Base gris"))
+        window.on_base_changed()
+        self.assertEqual(window.job_settings().base_rgb, [150, 150, 150])
+        self.assertEqual(window.channel_colors["W"].getRgb()[:3], (150, 150, 150))
+        window.denoise_combo.setCurrentIndex(window.denoise_combo.findData("strong"))
+        self.assertEqual(window.job_settings().denoise, "strong")
+        window.close()
 
     def test_resolution_advice_for_solid_spot_colors(self):
         spots = [{"id": "S1", "name": "Negro", "rgb": [0, 0, 0], "halftone": False}]

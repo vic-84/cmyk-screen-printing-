@@ -157,6 +157,20 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
 - Verificada en Chromium: carga, CMYK sobre algodón negro, color plano y descarga del zip, sin errores en consola.
 - Pruebas: 56 (5 de la API web).
 
+### Base de color y calidad de imagen *(agregado)*
+- **Base configurable**:
+  - **blanca**: color más brillante en prenda oscura
+  - **gris claro** o **gris**: cubre con menos tinta y deja un tacto más suave
+  - **gris bloqueadora**: frena la migración del teñido en poliéster; la aplica el perfil «Poliéster oscuro»
+  - **personalizada**: cualquier color
+  El nombre de la base sale en la película, en el orden de impresión y en las especificaciones, y la simulación usa su color: una tinta transparente sobre base gris se ve más apagada que sobre blanca, como en prensa.
+- **Mejora de imagen antes de separar** (`src/core/enhance.py`):
+  - **Limpiar ruido** (suave o fuerte): quita ruido y halos JPEG a la resolución original, donde está el ruido.
+  - **Enfoque** (%): máscara de enfoque tras ampliar, útil en fotos de poca resolución.
+  - **Suavizar bordes de tintas sólidas** (activado por defecto): al ampliar una imagen chica, quita los escalones de cada píxel original sin crear solapes ni huecos, porque decide la tinta de cada píxel con todas las máscaras suavizadas a la vez.
+  - Medido con el arte UZUMAKI a tamaño A4: rugosidad del borde −34 % en negro y −45 % en rojo; motas de 39 a 1; cero solapes.
+- Pruebas: 75.
+
 ### Control de detalle en tintas sólidas *(agregado tras probar con arte de línea)*
 Probado con un arte de dos tintas planas (rojo y negro sobre fondo claro):
 - Resultados: 99.4–100 % de cada color original cubierto, 0 % de tinta sobre el fondo, películas sólidas (solo 0/255) y knockout limpio. El trapping crece solo bajo el color más oscuro.

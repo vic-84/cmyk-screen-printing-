@@ -33,7 +33,7 @@ from ..core.job import JobSettings
 from ..core.separation import render
 from ..core.spot import default_needs_base, order_light_to_dark
 from ..utils.constants import (
-    ANGLE_PRESETS, CMYK_ANGLES, LPI_OPTIONS, POINT_SHAPES, SEPARATION_MODES,
+    ANGLE_PRESETS, BASE_PRESETS, CMYK_ANGLES, LPI_OPTIONS, POINT_SHAPES, SEPARATION_MODES,
 )
 
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
@@ -83,6 +83,7 @@ def _png_base64(rgb):
 
 def _ink_colors(settings):
     colors = dict(INK_COLORS)
+    colors['W'] = tuple(settings.base_rgb)
     for spot in settings.spot_colors:
         colors[spot["id"]] = tuple(spot["rgb"])
     return colors
@@ -130,7 +131,7 @@ def options():
         "modes": SEPARATION_MODES, "shapes": POINT_SHAPES, "angle_presets": ANGLE_PRESETS,
         "default_angles": CMYK_ANGLES, "lpi_options": LPI_OPTIONS, "papers": PAPER_FORMATS,
         "substrates": sim.SUBSTRATE_PROFILES, "ink_types": sim.INK_TYPES,
-        "profiles": _profiles(), "intents": list(icc.INTENTS.keys()),
+        "profiles": _profiles(), "intents": list(icc.INTENTS.keys()), "bases": BASE_PRESETS,
         "defaults": JobSettings().to_dict(),
     }
 

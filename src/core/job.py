@@ -63,11 +63,17 @@ class JobSettings:
     ink_type: str = "Plastisol de proceso"
     substrate: str = "Personalizado"
     ink_limit: float = TOTAL_INK_LIMIT   # %
+    # Calidad de imagen
+    denoise: str = 'off'                 # off | light | strong (ruido JPEG)
+    sharpen: float = 0.0                 # % de máscara de enfoque tras ampliar
+    smooth_edges: bool = True            # suavizar bordes de tintas sólidas al ampliar
     resolution_factor: float = 1.0
     resolution_method: str = 'INTER_CUBIC'
 
     # Base blanca
     white_base: bool = False
+    base_name: str = 'Base blanca'       # blanca, gris claro, gris, gris bloqueadora…
+    base_rgb: list = field(default_factory=lambda: [255, 255, 255])
     white_base_threshold: int = WHITE_BASE_SETTINGS['opacity_threshold']
     white_base_choke_px: int = WHITE_BASE_SETTINGS['choke_pixels']
 
@@ -124,6 +130,8 @@ class JobSettings:
         spot = self.spot(channel)
         if spot:
             return spot.get('name') or channel
+        if channel == 'W':
+            return self.base_name or CHANNEL_NAMES['W']
         return CHANNEL_NAMES.get(channel, channel)
 
     def channel_angle(self, channel):

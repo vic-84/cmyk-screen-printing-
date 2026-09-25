@@ -312,3 +312,14 @@ def format_dimension_display(width, height, unit):
     unit_info = MEASUREMENT_UNITS.get(unit, {'symbol': unit})
     symbol = unit_info.get('symbol', unit)
     return f"{width:.1f}×{height:.1f}{symbol}"
+
+
+# Bases bajo el color: la blanca da el color más brillante en prenda oscura;
+# la gris cubre con menos tinta y tacto más suave; la gris bloqueadora (oscura)
+# frena la migración del teñido en poliéster.
+BASE_PRESETS = {
+    "Base blanca": [255, 255, 255],
+    "Base gris claro": [200, 200, 200],
+    "Base gris": [150, 150, 150],
+    "Base gris bloqueadora": [95, 95, 98],
+}

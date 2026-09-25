@@ -112,6 +112,10 @@
         </div>
         <input type="file" id="file" hidden accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp,.psd,.psb,.pdf,.ai,.svg,.eps">
         <img class="thumb" id="thumb" alt="Imagen original">
+        <div class="row"><label for="denoise">Limpiar ruido</label><select id="denoise" class="span2">
+          <option value="off">No</option><option value="light">Suave</option><option value="strong">Fuerte</option></select></div>
+        <div class="row"><label for="sharpen">Enfoque</label><input type="number" id="sharpen" value="0" min="0" max="150"><span class="hint">%</span></div>
+        <div class="checks"><label><input type="checkbox" id="smoothEdges" checked> Suavizar bordes de tintas sólidas</label></div>
         <p class="hint" id="info"></p>
       </fieldset>
 
@@ -155,7 +159,8 @@
         <div class="row"><label for="garment">Color de prenda</label><input type="color" id="garment" value="#ffffff"><span></span></div>
         <div class="row"><label for="inkType">Tinta</label><select id="inkType" class="span2"></select></div>
         <div class="row"><label for="inkLimit">Límite de tinta</label><input type="number" id="inkLimit" value="260" min="100" max="400"><span class="hint">%</span></div>
-        <div class="checks"><label><input type="checkbox" id="whiteBase"> Base blanca</label></div>
+        <div class="row"><label for="base">Base</label><select id="base"></select><input type="color" id="baseColor" value="#ffffff" title="Color de la base"></div>
+        <div class="checks"><label><input type="checkbox" id="whiteBase"> Imprimir base bajo el color</label></div>
       </fieldset>
 
       <fieldset>
@@ -245,6 +250,9 @@ function currentSettings() {
     control_strip: $("strip").checked, mirror: $("mirror").checked, negative: $("negative").checked,
     output_format: $("format").value, ink_limit: +$("inkLimit").value, ink_type: $("inkType").value,
     substrate: $("substrate").value, white_base: $("whiteBase").checked,
+    base_name: $("base").value === "custom" ? "Base " + $("baseColor").value.toUpperCase() : $("base").value,
+    base_rgb: hexToRgb($("baseColor").value),
+    denoise: $("denoise").value, sharpen: +$("sharpen").value, smooth_edges: $("smoothEdges").checked,
     garment_rgb: hexToRgb($("garment").value), spot_colors: state.spots,
     icc_profile: $("iccProfile").value, icc_intent: $("iccIntent").value, icc_bpc: $("iccBpc").checked,
     icc_ink_limit: $("iccLimit").checked, input_profile: $("inputProfile").value,
@@ -393,6 +401,8 @@ function applySubstrate() {
   const p = state.options.substrates[$("substrate").value];
   if (!p) return;
   $("garment").value = rgbToHex(p.garment); $("whiteBase").checked = p.white_base;
+  if (p.base) { $("base").value = p.base; $("baseColor").value = rgbToHex(state.options.bases[p.base]); }
+  else { $("base").value = "Base blanca"; $("baseColor").value = "#ffffff"; }
   $("inkLimit").value = p.ink_limit; $("minDot").value = p.min_dot; $("maxDot").value = p.max_dot; $("gain").value = p.dot_gain;
   schedule();
 }
@@ -423,6 +433,9 @@ async function init() {
   fillSelect($("inkType"), Object.keys(o.ink_types).map(k => [k, k]));
   fillSelect($("paper"), Object.keys(o.papers).map(k => [k, k]), "A3");
   fillSelect($("iccIntent"), o.intents.map(k => [k, k]));
+  fillSelect($("base"), [...Object.keys(o.bases).map(k => [k, k]), ["Personalizada", "custom"]], "Base blanca");
+  $("base").onchange = () => { if (o.bases[$("base").value]) $("baseColor").value = rgbToHex(o.bases[$("base").value]); schedule(); };
+  $("baseColor").onchange = () => { $("base").value = "custom"; schedule(); };
   fillProfiles(o.profiles, "");
   $("iccProfile").onchange = $("iccIntent").onchange = $("iccBpc").onchange = () => { describeProfile(); schedule(); };
   $("iccLimit").onchange = schedule;
@@ -470,7 +483,7 @@ async function init() {
     } catch (e) { setStatus(e.message, true); }
   };
   for (const id of ["shape", "angles", "minDot", "maxDot", "gain", "garment", "inkType", "inkLimit", "whiteBase",
-                    "paper", "fit", "guides", "strip", "mirror", "negative", "trap", "despeckle", "tolerance", "indexRes", "misreg", "dpi"]) {
+                    "paper", "fit", "guides", "strip", "mirror", "negative", "trap", "despeckle", "denoise", "sharpen", "smoothEdges", "tolerance", "indexRes", "misreg", "dpi"]) {
     $(id).addEventListener("change", schedule);
   }
   checkMesh();

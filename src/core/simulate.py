@@ -34,6 +34,9 @@ SUBSTRATE_PROFILES = {
                         "min_dot": 6, "max_dot": 94, "dot_gain": 15},
     "Papel / cartulina": {"garment": [250, 250, 245], "white_base": False, "ink_limit": 300,
                           "min_dot": 4, "max_dot": 96, "dot_gain": 10},
+    # Poliéster teñido: la base gris bloqueadora frena la migración del colorante
+    "Poliéster oscuro": {"garment": [25, 28, 45], "white_base": True, "ink_limit": 240,
+                         "min_dot": 10, "max_dot": 90, "dot_gain": 18, "base": "Base gris bloqueadora"},
 }
 
 # Desplazamientos de la prueba de calce: cada tinta se corre en otra dirección

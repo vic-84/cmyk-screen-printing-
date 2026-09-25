@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 
 from .color import rgb_to_lab
+from .enhance import smooth_partition
 from .screening import BAND_ROWS
 
 GARMENT_ID = '_prenda'
@@ -118,7 +119,7 @@ def spot_masks_for_cmyk(bgr, alpha, settings):
     return channels, knockout
 
 
-def separate_spot(bgr, alpha, settings, scale=1.0):
+def separate_spot(bgr, alpha, settings, scale=1.0, source_px=1.0):
     """
     Devuelve {id_de_tinta: canal uint8 (255 = 100 %)} y 'W' si hay base.
     """
@@ -150,6 +151,19 @@ def separate_spot(bgr, alpha, settings, scale=1.0):
         for i, spot in enumerate(spots):
             amount = weights[i] if spot.get('halftone') else (band_nearest == i).astype(np.float32)
             amounts[i, top:bottom] = np.round(np.clip(amount * opacity, 0, 1) * 255).astype(np.uint8)
+
+    # Al ampliar una imagen chica cada píxel original es un escalón: se suavizan
+    # los límites entre tintas sólidas (sin crear solapes ni huecos)
+    solid = [i for i, spot in enumerate(spots) if not spot.get('halftone')]
+    if settings.smooth_edges and solid and source_px > 1.3:
+        layers = amounts[solid]            # copia: smooth_partition la modifica
+        winner = smooth_partition(layers, 0.45 * source_px)
+        if winner is not None:
+            for k, i in enumerate(solid):
+                amounts[i] = layers[k]
+                nearest[winner == k] = i
+            was_solid = np.isin(nearest, solid)
+            nearest[(winner == len(solid)) & was_solid] = len(spots)
 
     speck_px = settings.despeckle_mm / 25.4 * settings.dpi * scale
     if speck_px >= 1:

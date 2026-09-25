@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from .image_processing import enhance_image_resolution, generate_white_base, resize_to_print_format
-from . import icc
+from . import enhance, icc
 from .screening import BAND_ROWS, screen_channel
 from .spot import separate_index, separate_spot, spot_masks_for_cmyk
 
@@ -38,7 +38,9 @@ def prepare_image(image, alpha, settings):
     genera sobre esta imagen: si se tramara antes y luego se reescalara, el
     LPI real dependería de la foto.
     """
-    working = enhance_image_resolution(image, settings.resolution_factor, settings.resolution_method)
+    # El ruido JPEG se limpia a la resolución original, donde está
+    source = enhance.denoise(image, settings.denoise)
+    working = enhance_image_resolution(source, settings.resolution_factor, settings.resolution_method)
     if alpha is not None:
         alpha = cv2.resize(alpha, (working.shape[1], working.shape[0]), interpolation=cv2.INTER_LINEAR)
 
@@ -50,7 +52,13 @@ def prepare_image(image, alpha, settings):
         working = resize_to_print_format(working, paper, settings.dpi)
         alpha = resize_to_print_format(alpha, paper, settings.dpi, background=0)
 
+    working = enhance.sharpen(working, settings.sharpen)
     return working, alpha
+
+
+def source_pixel_size(original_shape, prepared_shape):
+    """Cuántos píxeles de salida ocupa un píxel de la imagen original."""
+    return max(prepared_shape[0] / max(original_shape[0], 1), prepared_shape[1] / max(original_shape[1], 1))
 
 
 def separate_cmyk(bgr, gcr, ink_limit):
@@ -99,10 +107,10 @@ def process_channels(bgr, settings):
     return separate_cmyk(bgr, settings.gcr, settings.ink_limit)
 
 
-def separate_channels(bgr, alpha, settings, scale=1.0):
+def separate_channels(bgr, alpha, settings, scale=1.0, source_px=1.0):
     """Canales de tinta continuos (sin tramar) para la imagen preparada."""
     if settings.mode == 'spot':
-        return separate_spot(bgr, alpha, settings, scale)
+        return separate_spot(bgr, alpha, settings, scale, source_px)
     if settings.mode == 'index':
         return separate_index(bgr, alpha, settings, scale)
     if settings.mode == 'cmyk_spot':
@@ -152,6 +160,7 @@ def render(image, alpha, settings, preview=False):
         if prepared_alpha is not None:
             prepared_alpha = cv2.resize(prepared_alpha, size, interpolation=cv2.INTER_AREA)
 
-    channels = separate_channels(prepared, prepared_alpha, settings, scale)
+    source_px = source_pixel_size(image.shape, prepared.shape)
+    channels = separate_channels(prepared, prepared_alpha, settings, scale, source_px)
     screens = {name: screen_channel(data, name, settings, scale) for name, data in channels.items()}
     return channels, screens, scale

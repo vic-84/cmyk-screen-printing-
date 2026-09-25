@@ -75,7 +75,12 @@ def separate_cmyk(bgr, gcr, ink_limit):
 
 def separate_channels(bgr, alpha, settings, scale=1.0):
     """Canales de tinta continuos (sin tramar) para la imagen preparada."""
-    channels = separate_cmyk(bgr, settings.gcr, settings.ink_limit)
+    if settings.mode == 'mono':
+        # Semitono de una tinta: la cantidad de tinta sigue la oscuridad de la imagen
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        channels = {'K': 255 - gray}
+    else:
+        channels = separate_cmyk(bgr, settings.gcr, settings.ink_limit)
     if settings.white_base:
         channels['W'] = generate_white_base(
             bgr, settings.white_base_threshold,

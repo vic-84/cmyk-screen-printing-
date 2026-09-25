@@ -56,38 +56,43 @@ MESH_SPECIFICATIONS = {
     }
 }
 
-# Generar LPI_VALUES basado en especificaciones reales
-LPI_VALUES = {}
-for mesh, specs in MESH_SPECIFICATIONS.items():
-    for lpi in specs['recommended_lpi']:
-        key = f"{lpi} LPI (malla {mesh})"
-        scale = max(3, int(400 / lpi))
-        LPI_VALUES[key] = scale
+# El LPI recomendado se calcula con la regla de 3.5 a 4.75 hilos por línea
+# (antes los valores implicaban ~2.5-3 hilos por línea y el punto se perdía).
+for _mesh, _specs in MESH_SPECIFICATIONS.items():
+    _specs['recommended_lpi'] = [round(_mesh / 4.5), round(_mesh / 4), round(_mesh / 3.6)]
+    _specs['max_lpi'] = int(_mesh / 3.5)
+
+# Mallas comunes en hilos/pulgada y su equivalente aproximado en hilos/cm
+COMMON_MESHES_TPI = [86, 110, 125, 140, 156, 160, 180, 196, 200, 230, 255, 280, 305, 355]
+
+# Lineaturas ofrecidas en la interfaz (el campo también acepta otros valores)
+LPI_OPTIONS = [20, 22, 25, 28, 30, 32, 35, 38, 40, 42, 45, 48, 50, 55, 60, 65, 70, 75, 85]
+LPI_VALUES = {f"{lpi} LPI": lpi for lpi in LPI_OPTIONS}
 
 # Clasificación por aplicación
 APPLICATION_CATEGORIES = {
     'Textil Básico': {
         'meshes': [90, 110],
         'description': 'Camisetas gruesas, sudaderas, efectos especiales',
-        'lpi_range': '25-45',
+        'lpi_range': '19-31',
         'ink_deposit': 'Alto (50-70 micrones)'
     },
     'Textil Premium': {
         'meshes': [120, 135],
         'description': 'Algodón fino, poliéster, gráficos detallados',
-        'lpi_range': '35-55', 
+        'lpi_range': '25-39',
         'ink_deposit': 'Medio (35-50 micrones)'
     },
     'Papel y Cartón': {
         'meshes': [150, 180],
         'description': 'Materiales porosos, etiquetas, packaging',
-        'lpi_range': '45-65',
+        'lpi_range': '32-51',
         'ink_deposit': 'Medio-Bajo (25-45 micrones)'
     },
     'Alta Definición': {
         'meshes': [200],
         'description': 'Electrónicos, cerámica, aplicaciones técnicas',
-        'lpi_range': '55-70',
+        'lpi_range': '42-57',
         'ink_deposit': 'Bajo (15-35 micrones)'
     }
 }
@@ -157,8 +162,9 @@ REGISTRATION_GUIDE_SETTINGS = {
 
 POINT_SHAPES = {
     "Redonda": "circle",
-    "Elipse": "ellipse",
-    "Diamante": "diamond", 
+    "Elíptica": "ellipse",
+    "Cuadrada": "square",
+    "Diamante": "diamond",
     "Lineal": "line"
 }
 
@@ -166,6 +172,23 @@ POINT_SHAPES = {
 # alinear ninguna placa con los hilos de la malla (0°/90°/45°). Con punto redondo
 # 90° equivale a 0°, por eso la base blanca no puede ir a 90° (chocaría con Y).
 CMYK_ANGLES = {'C': 22.5, 'M': 52.5, 'Y': 7.5, 'K': 82.5, 'W': 37.5}
+
+# Juegos de ángulos seleccionables
+ANGLE_PRESETS = {
+    "Serigrafía (offset + 7.5°)": dict(CMYK_ANGLES),
+    # Juego clásico de offset: 0°/45°/90° coinciden con la geometría de la malla
+    "Offset (15/75/0/45)": {'C': 15, 'M': 75, 'Y': 0, 'K': 45, 'W': 30},
+    # Una sola tinta: se usa el ángulo en K (y en la base blanca)
+    "Monocromo 22.5°": {**CMYK_ANGLES, 'K': 22.5, 'W': 67.5},
+    "Monocromo 25°": {**CMYK_ANGLES, 'K': 25, 'W': 70},
+}
+CUSTOM_ANGLE_PRESET = "Personalizado"
+
+# Técnicas de separación
+SEPARATION_MODES = {
+    "Cuatricromía (CMYK)": "cmyk",
+    "Semitono (1 tinta)": "mono",
+}
 CHANNEL_NAMES = ["C", "M", "Y", "K", "W"]  # Incluimos base blanca
 
 # Configuraciones de resolución

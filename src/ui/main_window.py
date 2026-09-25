@@ -38,7 +38,9 @@ from . import theme
 from ..core.job import JobSettings
 from ..core.screening import halftone, screen_channel
 from ..core.separation import needs_paper_fit, render
+from ..core import mesh as mesh_rules
 from ..core import output
+from ..core import tone as tone_rules
 
 
 # --- Verificación de dependencias ---
@@ -92,9 +94,10 @@ class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
     """
     ROW_HEIGHT = 30
 
-    def __init__(self, color_for_channel, parent=None):
+    def __init__(self, color_for_channel, angle_for_channel=None, parent=None):
         super().__init__(parent)
         self._color_for_channel = color_for_channel
+        self._angle_for_channel = angle_for_channel or (lambda ch: CMYK_ANGLES.get(ch))
 
     def sizeHint(self, option, index):
         return QtCore.QSize(option.rect.width(), self.ROW_HEIGHT)
@@ -125,7 +128,7 @@ class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
         painter.drawText(text_rect, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft,
                          CHANNEL_NAMES.get(channel, channel))
         painter.setPen(QtGui.QColor(theme.TEXTO_SUAVE))
-        angle = CMYK_ANGLES.get(channel)
+        angle = self._angle_for_channel(channel)
         if angle is not None:
             painter.drawText(text_rect, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight, f"{angle:g}°")
         painter.restore()
@@ -541,7 +544,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         # -- PANEL IZQUIERDO: controles con scroll + barra de acciones fija --
         left_panel = QtWidgets.QWidget()
-        left_panel.setFixedWidth(400)
+        left_panel.setFixedWidth(430)
         left_layout = QtWidgets.QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
@@ -592,24 +595,86 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         params_layout.setVerticalSpacing(6)
         params_layout.setColumnStretch(1, 1)
 
-        params_layout.addWidget(field_label("Lineatura"), 0, 0)
+        params_layout.addWidget(field_label("Técnica"), 0, 0)
+        self.mode_combo = compact_combo(QtWidgets.QComboBox())
+        self.mode_combo.addItems(list(SEPARATION_MODES.keys()))
+        self.mode_combo.setToolTip("Cuatricromía: 4 tintas (+ base). Semitono: una tinta a partir de los grises")
+        params_layout.addWidget(self.mode_combo, 0, 1, 1, 2)
+
+        params_layout.addWidget(field_label("Malla"), 1, 0)
+        self.mesh_spin = QtWidgets.QDoubleSpinBox()
+        self.mesh_spin.setRange(10, 500)
+        self.mesh_spin.setDecimals(0)
+        self.mesh_spin.setValue(200)
+        self.mesh_spin.setToolTip("Número de hilos de la malla de la pantalla")
+        params_layout.addWidget(self.mesh_spin, 1, 1)
+        self.mesh_unit_combo = QtWidgets.QComboBox()
+        self.mesh_unit_combo.addItem("hilos/pulg", "in")
+        self.mesh_unit_combo.addItem("hilos/cm", "cm")
+        params_layout.addWidget(self.mesh_unit_combo, 1, 2)
+
+        params_layout.addWidget(field_label("Lineatura"), 2, 0)
         self.lpi_combo = compact_combo(QtWidgets.QComboBox())
+        self.lpi_combo.setEditable(True)
         self.lpi_combo.addItems(list(LPI_VALUES.keys()))
-        params_layout.addWidget(self.lpi_combo, 0, 1)
-
-        params_layout.addWidget(field_label("Forma de punto"), 1, 0)
-        self.shape_combo = compact_combo(QtWidgets.QComboBox())
-        self.shape_combo.addItems(list(POINT_SHAPES.keys()))
-        params_layout.addWidget(self.shape_combo, 1, 1)
-
-        params_layout.addWidget(field_label("Resolución"), 2, 0)
-        self.resolution_combo = compact_combo(QtWidgets.QComboBox())
-        self.resolution_combo.addItems(list(RESOLUTION_ENHANCEMENT.keys()))
-        params_layout.addWidget(self.resolution_combo, 2, 1)
+        self.lpi_combo.setCurrentText("45 LPI")
+        self.lpi_combo.setToolTip("Líneas por pulgada. Puedes escribir cualquier valor, por ejemplo 31")
+        params_layout.addWidget(self.lpi_combo, 2, 1)
+        self.suggest_lpi_btn = QtWidgets.QPushButton("Sugerida")
+        self.suggest_lpi_btn.setToolTip("Usar la lineatura recomendada para la malla (malla ÷ 3.5 a 4.75, sin relación entera)")
+        self.suggest_lpi_btn.clicked.connect(self.apply_suggested_lpi)
+        params_layout.addWidget(self.suggest_lpi_btn, 2, 2)
 
         self.moire_warning = MoireWarningWidget(self)
-        params_layout.addWidget(self.moire_warning, 3, 0, 1, 2)
+        params_layout.addWidget(self.moire_warning, 3, 0, 1, 3)
+
+        params_layout.addWidget(field_label("Forma de punto"), 4, 0)
+        self.shape_combo = compact_combo(QtWidgets.QComboBox())
+        self.shape_combo.addItems(list(POINT_SHAPES.keys()))
+        params_layout.addWidget(self.shape_combo, 4, 1, 1, 2)
+
+        params_layout.addWidget(field_label("Ángulos"), 5, 0)
+        self.angle_preset_combo = compact_combo(QtWidgets.QComboBox())
+        self.angle_preset_combo.addItems(list(ANGLE_PRESETS.keys()) + [CUSTOM_ANGLE_PRESET])
+        self.angle_preset_combo.setToolTip("En serigrafía, 0°, 45° y 90° coinciden con los hilos de la malla")
+        self.angle_preset_combo.currentTextChanged.connect(self.on_angle_preset_changed)
+        params_layout.addWidget(self.angle_preset_combo, 5, 1, 1, 2)
+
+        params_layout.addWidget(field_label("Resolución"), 6, 0)
+        self.resolution_combo = compact_combo(QtWidgets.QComboBox())
+        self.resolution_combo.addItems(list(RESOLUTION_ENHANCEMENT.keys()))
+        params_layout.addWidget(self.resolution_combo, 6, 1, 1, 2)
         controls_layout.addWidget(params_group)
+
+        # === TONO ===
+        tone_group = QtWidgets.QGroupBox("Tono")
+        tone_layout = QtWidgets.QGridLayout(tone_group)
+        tone_layout.setHorizontalSpacing(10)
+        tone_layout.setVerticalSpacing(6)
+        tone_layout.setColumnStretch(1, 1)
+
+        def percent_spin(value, maximum=100.0, tooltip=""):
+            spin = QtWidgets.QDoubleSpinBox()
+            spin.setRange(0, maximum)
+            spin.setDecimals(0)
+            spin.setSuffix(" %")
+            spin.setValue(value)
+            spin.setToolTip(tooltip)
+            return spin
+
+        tone_layout.addWidget(field_label("Punto mínimo"), 0, 0)
+        self.min_dot_spin = percent_spin(0, 50, "Los puntos más pequeños se eliminan: la malla no los sostiene")
+        tone_layout.addWidget(self.min_dot_spin, 0, 1)
+        tone_layout.addWidget(field_label("Punto máximo"), 1, 0)
+        self.max_dot_spin = percent_spin(100, 100, "Los puntos más grandes se imprimen sólidos: se cerrarían por la ganancia")
+        tone_layout.addWidget(self.max_dot_spin, 1, 1)
+        tone_layout.addWidget(field_label("Ganancia al 50 %"), 2, 0)
+        self.dot_gain_spin = percent_spin(0, 45, "Cuánto crece un punto del 50 % al imprimir (mídelo con la plantilla). "
+                                                  "La trama se compensa para que imprima el tono correcto")
+        tone_layout.addWidget(self.dot_gain_spin, 2, 1)
+        self.tone_hint = secondary_label("Referencia textil: punto mínimo 5–10 %, máximo 85–95 %, ganancia 15–30 %.")
+        tone_layout.addWidget(self.tone_hint, 3, 0, 1, 2)
+        controls_layout.addWidget(tone_group)
 
         # === SALIDA ===
         format_group = QtWidgets.QGroupBox("Salida")
@@ -689,7 +754,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         self.channel_list = DraggableChannelList(self)
         self.channel_list.setItemDelegate(
-            ChannelScreenDelegate(lambda ch: self.channel_colors.get(ch, QtGui.QColor("white")), self.channel_list))
+            ChannelScreenDelegate(
+                lambda ch: self.channel_colors.get(ch, QtGui.QColor("white")),
+                lambda ch: self.angle_spins[ch].value() if hasattr(self, 'angle_spins') else CMYK_ANGLES.get(ch),
+                self.channel_list))
         self.channel_list.orderChanged.connect(self.set_channel_order)
         self.channel_list.itemSelectionChanged.connect(self.on_channel_selection_changed)
         self.channel_list.setFixedHeight(ChannelScreenDelegate.ROW_HEIGHT * 5 + 4)
@@ -738,6 +806,35 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             colors_tab_layout.addWidget(restore_btn, i, 2)
 
         channels_tabs.addTab(colors_tab, "Colores de tinta")
+
+        adjust_tab = QtWidgets.QWidget()
+        adjust_layout = QtWidgets.QGridLayout(adjust_tab)
+        adjust_layout.setContentsMargins(8, 8, 8, 8)
+        adjust_layout.setHorizontalSpacing(8)
+        adjust_layout.setVerticalSpacing(6)
+        adjust_layout.addWidget(field_label("Canal"), 0, 0)
+        adjust_layout.addWidget(field_label("Densidad"), 0, 1)
+        adjust_layout.addWidget(field_label("Ángulo"), 0, 2)
+        self.density_spins, self.angle_spins = {}, {}
+        for i, ch in enumerate(['C', 'M', 'Y', 'K', 'W'], 1):
+            adjust_layout.addWidget(QtWidgets.QLabel(CHANNEL_NAMES[ch]), i, 0)
+            density = QtWidgets.QDoubleSpinBox()
+            density.setRange(0, 150)
+            density.setDecimals(0)
+            density.setSuffix(" %")
+            density.setValue(100)
+            density.setToolTip("Cantidad de tinta del canal: 100 % = sin cambio")
+            adjust_layout.addWidget(density, i, 1)
+            angle = QtWidgets.QDoubleSpinBox()
+            angle.setRange(0, 179.5)
+            angle.setDecimals(1)
+            angle.setSingleStep(7.5)
+            angle.setSuffix(" °")
+            angle.setValue(CMYK_ANGLES[ch])
+            angle.valueChanged.connect(self.on_channel_angle_edited)
+            adjust_layout.addWidget(angle, i, 2)
+            self.density_spins[ch], self.angle_spins[ch] = density, angle
+        channels_tabs.addTab(adjust_tab, "Densidad y ángulo")
         channels_layout.addWidget(channels_tabs)
         controls_layout.addWidget(channels_group)
         controls_layout.addStretch()
@@ -834,6 +931,14 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.update_all_color_buttons_ui()
 
         self.lpi_combo.currentTextChanged.connect(self.update_moire_analysis)
+        self.mesh_spin.valueChanged.connect(self.update_moire_analysis)
+        for control in (self.min_dot_spin, self.max_dot_spin, self.dot_gain_spin, *self.density_spins.values()):
+            control.valueChanged.connect(self.schedule_rescreen)
+        for control in (self.shape_combo, self.angle_preset_combo, self.lpi_combo):
+            control.currentTextChanged.connect(self.schedule_rescreen)
+        for control in self.angle_spins.values():
+            control.valueChanged.connect(self.schedule_rescreen)
+        self.mesh_unit_combo.currentIndexChanged.connect(self.on_mesh_unit_changed)
         self.shape_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.update_moire_analysis()
 
@@ -1279,51 +1384,82 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         except json.JSONDecodeError as e:
             QtWidgets.QMessageBox.critical(self, "Error de Carga", f"Error de formato en el archivo JSON: {e}")
 
-    def update_moire_analysis(self):
-        """
-        VERSIÓN SIMPLE CON DEBUG - Para verificar que se ejecuta
-        """
-        print("🔍 === UPDATE MOIRE ANALYSIS CALLED ===")
-        
+    def schedule_rescreen(self, *_):
+        """Vuelve a tramar la vista previa poco después del último cambio de tono o trama."""
+        if not self.channel_arrays:
+            return
+        if not hasattr(self, '_rescreen_timer'):
+            self._rescreen_timer = QtCore.QTimer(self)
+            self._rescreen_timer.setSingleShot(True)
+            self._rescreen_timer.timeout.connect(self.rescreen_preview)
+        self._rescreen_timer.start(250)
+
+    def rescreen_preview(self):
+        """Retrama los canales ya separados (no repite la separación de color)."""
+        if not self.channel_arrays:
+            return
+        settings = self.job_settings()
+        self.preview_cache = {name: screen_channel(data, name, settings, self.preview_scale)
+                              for name, data in self.channel_arrays.items()}
+        self.update_preview()
+
+    def mesh_tpi(self):
+        """Malla actual en hilos por pulgada."""
+        return mesh_rules.to_threads_per_inch(self.mesh_spin.value(), self.mesh_unit_combo.currentData())
+
+    def current_lpi(self):
         try:
-            # Verificar que el detector existe
-            if not hasattr(self, 'moire_detector'):
-                print("❌ No hay moire_detector")
-                return
-                
-            if not hasattr(self, 'moire_warning'):
-                print("❌ No hay moire_warning widget")
-                return
-                
-            # Obtener LPI actual
-            lpi_text = self.lpi_combo.currentText()
-            print(f"📏 LPI text: '{lpi_text}'")
-            
-            if not lpi_text:
-                print("❌ No hay texto de LPI")
-                return
-                
-            # Extraer número de LPI
-            lpi = int(lpi_text.split()[0])
-            mesh_match = re.search(r"malla\s+(\d+)", lpi_text)
-            mesh = int(mesh_match.group(1)) if mesh_match else 120
-            
-            print(f"🔢 LPI: {lpi}, Malla: {mesh}, Ratio: {mesh/lpi:.3f}")
-            
-            # Realizar análisis
-            analysis = self.moire_detector.analyze_moire_risk(lpi, mesh, {})
-            
-            print(f"📊 Resultado: {analysis['risk_level']} ({analysis['risk_score']:.1%})")
-            
-            # Actualizar widget
-            self.moire_warning.update_moire_status(lpi, mesh, analysis)
-            
-            print("✅ Widget actualizado")
-            
-        except Exception as e:
-            print(f"❌ Error en update_moire_analysis: {e}")
-            import traceback
-            traceback.print_exc()
+            return float(self.lpi_combo.currentText().split()[0].replace(",", "."))
+        except (ValueError, IndexError):
+            return 0.0
+
+    def on_mesh_unit_changed(self):
+        """Convierte el valor mostrado al cambiar de hilos/pulg a hilos/cm y viceversa."""
+        unit = self.mesh_unit_combo.currentData()
+        previous = 'in' if unit == 'cm' else 'cm'
+        tpi = mesh_rules.to_threads_per_inch(self.mesh_spin.value(), previous)
+        self.mesh_spin.blockSignals(True)
+        self.mesh_spin.setValue(round(mesh_rules.from_threads_per_inch(tpi, unit)))
+        self.mesh_spin.blockSignals(False)
+        self.update_moire_analysis()
+
+    def apply_suggested_lpi(self):
+        lpi = mesh_rules.suggested_lpi(self.mesh_tpi())
+        self.lpi_combo.setCurrentText(f"{lpi} LPI")
+
+    def current_angles(self):
+        return {ch: spin.value() for ch, spin in self.angle_spins.items()}
+
+    def on_angle_preset_changed(self, name):
+        angles = ANGLE_PRESETS.get(name)
+        if angles is None:
+            return
+        for ch, spin in self.angle_spins.items():
+            spin.blockSignals(True)
+            spin.setValue(angles.get(ch, spin.value()))
+            spin.blockSignals(False)
+        self.channel_list.viewport().update()
+
+    def on_channel_angle_edited(self):
+        """Un ángulo editado a mano pasa el juego a «Personalizado»."""
+        self.angle_preset_combo.blockSignals(True)
+        self.angle_preset_combo.setCurrentText(CUSTOM_ANGLE_PRESET)
+        self.angle_preset_combo.blockSignals(False)
+        self.channel_list.viewport().update()
+
+    def update_moire_analysis(self):
+        """Evalúa la malla y la lineatura actuales y actualiza el aviso."""
+        if not hasattr(self, 'moire_warning') or not hasattr(self, 'mesh_spin'):
+            return
+        lpi = self.current_lpi()
+        if lpi <= 0:
+            return
+        mesh = self.mesh_tpi()
+        analysis = self.moire_detector.analyze_moire_risk(int(round(lpi)), int(round(mesh)), {})
+        level, message = mesh_rules.assess(mesh, lpi)
+        low, high = mesh_rules.suggested_lpi_range(mesh)
+        self.moire_warning.update_moire_status(lpi, mesh, analysis, level, message,
+                                               f"Recomendado: {low:.0f}–{high:.0f} LPI")
 
 
     def detect_image_resolution(self, file_path):
@@ -1757,14 +1893,17 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         """Lee la interfaz y devuelve la configuración del trabajo para el motor."""
         print_format = self.get_current_print_format()
         resolution = self.get_current_resolution_settings()
-        try:
-            lpi = float(self.lpi_combo.currentText().split()[0])
-        except (ValueError, IndexError):
-            lpi = 45.0
         return JobSettings(
-            lpi=lpi,
+            mode=SEPARATION_MODES.get(self.mode_combo.currentText(), 'cmyk'),
+            mesh_tpi=self.mesh_tpi(),
+            mesh_unit=self.mesh_unit_combo.currentData(),
+            lpi=self.current_lpi() or 45.0,
             dot_shape=POINT_SHAPES.get(self.shape_combo.currentText(), 'circle'),
-            angles=dict(CMYK_ANGLES),
+            angle_preset=self.angle_preset_combo.currentText(),
+            angles=self.current_angles(),
+            min_dot=self.min_dot_spin.value(),
+            max_dot=self.max_dot_spin.value(),
+            dot_gain=self.dot_gain_spin.value(),
             dpi=int(print_format["dpi_recommended"]),
             paper_width_mm=float(print_format["width"]),
             paper_height_mm=float(print_format["height"]),
@@ -1774,18 +1913,36 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             resolution_method=resolution.get("method"),
             white_base=self.white_base_cb.isChecked(),
             thresholds=dict(self.channel_thresholds),
+            density={ch: spin.value() for ch, spin in self.density_spins.items()},
             channel_order=list(self.channel_order),
         )
 
     def apply_job_settings(self, settings):
         """Refleja en la interfaz una configuración cargada de archivo."""
-        lpi_items = [self.lpi_combo.itemText(i) for i in range(self.lpi_combo.count())]
-        closest = min(lpi_items, key=lambda t: abs(float(t.split()[0]) - settings.lpi), default=None)
-        if closest:
-            self.lpi_combo.setCurrentText(closest)
+        for label, mode in SEPARATION_MODES.items():
+            if mode == settings.mode:
+                self.mode_combo.setCurrentText(label)
+        unit_index = self.mesh_unit_combo.findData(settings.mesh_unit)
+        self.mesh_unit_combo.blockSignals(True)
+        self.mesh_unit_combo.setCurrentIndex(max(unit_index, 0))
+        self.mesh_unit_combo.blockSignals(False)
+        self.mesh_spin.setValue(round(mesh_rules.from_threads_per_inch(settings.mesh_tpi, settings.mesh_unit)))
+        self.lpi_combo.setCurrentText(f"{settings.lpi:g} LPI")
         for label, shape in POINT_SHAPES.items():
             if shape == settings.dot_shape:
                 self.shape_combo.setCurrentText(label)
+        for ch, spin in self.angle_spins.items():
+            spin.blockSignals(True)
+            spin.setValue(settings.angles.get(ch, spin.value()))
+            spin.blockSignals(False)
+        self.angle_preset_combo.blockSignals(True)
+        self.angle_preset_combo.setCurrentText(settings.angle_preset)
+        self.angle_preset_combo.blockSignals(False)
+        self.min_dot_spin.setValue(settings.min_dot)
+        self.max_dot_spin.setValue(settings.max_dot)
+        self.dot_gain_spin.setValue(settings.dot_gain)
+        for ch, spin in self.density_spins.items():
+            spin.setValue(settings.density.get(ch, 100.0))
         self.fit_format_cb.setChecked(settings.fit_to_paper)
         self.guides_cb.setChecked(settings.registration_guides)
         self.white_base_cb.setChecked(settings.white_base)
@@ -1795,6 +1952,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.custom_width.setValue(convert_units(settings.paper_width_mm, "mm", self.get_current_unit()))
         self.custom_height.setValue(convert_units(settings.paper_height_mm, "mm", self.get_current_unit()))
         self.custom_dpi.setValue(settings.dpi)
+        self.update_moire_analysis()
 
     def save_job_settings(self):
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
@@ -1939,10 +2097,19 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 if ch in self.preview_cache:
                     channels_to_show.append(ch)
 
-            # Aplicar canales según orden de impresión (tu código existente)
+            # Simulación de lo impreso: trama + ganancia de punto de la prensa,
+            # o tono continuo si «Ver trama» está desactivado
+            settings = self.job_settings()
+            show_screen = self.show_halftones_cb.isChecked()
             for channel in self.channel_order:
                 if channel in channels_to_show:
-                    mask = (255 - self.preview_cache[channel]).astype(np.float32) / 255.0
+                    if show_screen:
+                        mask = tone_rules.printed_ink(self.preview_cache[channel], settings.dot_gain,
+                                                      settings.cell_px * self.preview_scale)
+                    else:
+                        film = tone_rules.apply_tone(self.channel_arrays[channel], channel, settings)
+                        mask = tone_rules.printed_from_film(film / 255.0, settings.dot_gain).astype(np.float32) \
+                            if settings.dot_gain > 0 else film.astype(np.float32) / 255.0
                     mask = mask[:, :, np.newaxis]
                     ink_rgb = np.array(self.channel_colors[channel].getRgbF()[:3], dtype=np.float32)
                     
@@ -3054,34 +3221,25 @@ class MoireWarningWidget(QtWidgets.QWidget):
         
         # No usar addStretch() para evitar problemas de layout
         
-    def update_moire_status(self, lpi, mesh, analysis_result):
-        """Actualizar estado visual del moiré - AJUSTE CORREGIDO"""
+    def update_moire_status(self, lpi, mesh, analysis_result, level='ok', message='', recommendation=''):
+        """
+        Muestra la evaluación malla/LPI (hilos por línea y relación entera).
+        El análisis detallado del detector queda en «Detalles».
+        """
         self.current_lpi = lpi
         self.current_mesh = mesh
         self.risk_level = analysis_result['risk_level']
         self.risk_score = analysis_result['risk_score']
         self.analysis_result = analysis_result
-        
-        texts = {
-            'CRITICO': 'Moiré: riesgo crítico',
-            'ALTO': 'Moiré: riesgo alto',
-            'MEDIO': 'Moiré: riesgo moderado',
-            'BAJO': 'Moiré: riesgo bajo',
-        }
-        ratio = mesh / lpi if lpi > 0 else 0
-        shown_level = self.risk_level
-        verdict = texts.get(self.risk_level, self.risk_level)
-        if 0 < ratio < 3.5 and self.risk_level in ('BAJO', 'MEDIO'):
-            # Por debajo de ~3.5 hilos por línea el punto pequeño no se sostiene
-            shown_level = 'ALTO'
-            verdict = "Malla muy abierta para esta lineatura"
-        color = theme.moire_style(shown_level)
 
-        self.status_label.setText(verdict)
+        verdicts = {'ok': "Malla y lineatura compatibles",
+                    'aviso': "Revisa la lineatura",
+                    'riesgo': "Malla muy abierta para esta lineatura"}
+        color = {'ok': theme.ESTADO_OK, 'aviso': theme.ESTADO_ALERTA, 'riesgo': theme.ESTADO_RIESGO}[level]
+
+        self.status_label.setText(verdicts[level])
         self.status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
-
-        self.detail_label.setText(f"{lpi} LPI en malla {mesh}: relación {ratio:.1f} (se recomienda 3.5 a 5)")
-
+        self.detail_label.setText(f"{message} {recommendation}".strip())
         self.setStyleSheet(f"""
             QWidget#detectorMoire {{
                 background: white;
@@ -3090,7 +3248,7 @@ class MoireWarningWidget(QtWidgets.QWidget):
                 border-radius: 3px;
             }}
         """)
-        self.analyze_btn.setText("Corregir…" if shown_level in ['CRITICO', 'ALTO'] else "Detalles")
+        self.analyze_btn.setText("Corregir…" if level == 'riesgo' else "Detalles")
         
     def show_detailed_analysis(self):
         """Mostrar análisis detallado en diálogo mejorado"""

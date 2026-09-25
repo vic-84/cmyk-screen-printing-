@@ -63,13 +63,22 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
   - Con guías, sin "Ajustar al formato" y la imagen más grande que el papel, la trama se reescalaba con `INTER_NEAREST`.
 - Pruebas: 16 (5 nuevas del motor).
 
-### Fase 2: Control de trama profesional
-- **Selector de malla independiente**, en hilos/pulgada o hilos/cm (×2.54), con el LPI sugerido (malla ÷ 3.5–4.75) y aviso de relación entera.
-- **Rango tonal** por canal (por defecto 10–90 %, editable; por ejemplo 6–97 %).
-- **Curva de ganancia de punto** por perfil. Se mide con la plantilla de la fase 3 y se compensa antes de tramar.
-- **Densidad** por canal.
-- **Juegos de ángulos** seleccionables (ver correcciones).
-- Formas de punto: redonda, elíptica, cuadrada, diamante y línea.
+### Fase 2: Control de trama profesional *(hecha)*
+- **Malla independiente** en hilos/pulgada o hilos/cm (×2.54) (`src/core/mesh.py`):
+  - rango recomendado malla ÷ 4.75 a ÷ 3.5
+  - botón **Sugerida**: el LPI más cercano a malla ÷ 4 sin relación entera (malla 120 → 29 LPI)
+  - aviso de malla muy abierta y de relación entera
+- **Lineatura libre**: acepta cualquier valor escrito, no solo la lista.
+- **Técnica**: cuatricromía o **semitono de una tinta**.
+- **Formas de punto**: redonda, elíptica, **cuadrada**, diamante y lineal, todas **calibradas**: la cobertura en película es igual al tono pedido (±1 %). Antes, con punto redondo, un 25 % salía al 15 % y un 75 % al 89 %.
+- **Juegos de ángulos**: serigrafía (offset + 7.5°), offset (15/75/0/45), monocromo 22.5° y 25°, y personalizado (se edita por canal).
+- **Tono** (`src/core/tone.py`):
+  - punto mínimo y máximo
+  - **compensación de ganancia de punto** según la ganancia medida al 50 %
+  - **densidad** por canal
+- **La simulación muestra lo impreso**: la película compensada más la ganancia de la prensa.
+- **Ajustes al instante**: los cambios de tono, forma, ángulos y LPI vuelven a tramar la vista previa sin repetir la separación.
+- Pruebas: 23.
 
 ### Fase 3: Salida de fotolitos
 - **Plantilla de ganancia de punto**: rejilla de LPI (10–60) × carga (10–90 %) para imprimir, grabar, estampar y comparar con lupa. Los resultados se capturan en la app y generan la curva de la fase 2.

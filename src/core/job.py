@@ -10,20 +10,32 @@ import json
 from dataclasses import asdict, dataclass, field, fields
 
 from ..utils.constants import (
-    CMYK_ANGLES, GCR_AMOUNT, REGISTRATION_GUIDE_SETTINGS, TOTAL_INK_LIMIT,
+    ANGLE_PRESETS, CMYK_ANGLES, GCR_AMOUNT, REGISTRATION_GUIDE_SETTINGS, TOTAL_INK_LIMIT,
     WHITE_BASE_SETTINGS,
 )
 
 PROCESS_CHANNELS = ('C', 'M', 'Y', 'K')
+MONO_CHANNELS = ('K',)
 NEUTRAL_THRESHOLD = 128
 
 
 @dataclass
 class JobSettings:
-    # Trama
+    # Técnica
+    mode: str = 'cmyk'                   # cmyk | mono
+
+    # Malla y trama
+    mesh_tpi: float = 200.0              # hilos por pulgada
+    mesh_unit: str = 'in'                # unidad mostrada: 'in' (hilos/pulg) o 'cm'
     lpi: float = 45.0
-    dot_shape: str = 'circle'            # circle | ellipse | diamond | line
+    dot_shape: str = 'circle'            # circle | ellipse | square | diamond | line
+    angle_preset: str = next(iter(ANGLE_PRESETS))
     angles: dict = field(default_factory=lambda: dict(CMYK_ANGLES))
+
+    # Tono (en %): puntos fuera del rango se eliminan o se hacen sólidos
+    min_dot: float = 0.0
+    max_dot: float = 100.0
+    dot_gain: float = 0.0                # ganancia medida a 50 %, en puntos
 
     # Salida
     dpi: int = 300
@@ -45,8 +57,9 @@ class JobSettings:
     white_base_threshold: int = WHITE_BASE_SETTINGS['opacity_threshold']
     white_base_choke_px: int = WHITE_BASE_SETTINGS['choke_pixels']
 
-    # Canales: umbral 128 = sin ajuste; menor = más tinta
+    # Canales: umbral 128 = sin ajuste; menor = más tinta. Densidad en %.
     thresholds: dict = field(default_factory=lambda: {c: NEUTRAL_THRESHOLD for c in 'CMYKW'})
+    density: dict = field(default_factory=lambda: {c: 100.0 for c in 'CMYKW'})
     channel_order: list = field(default_factory=lambda: ['W', 'Y', 'C', 'M', 'K'])
 
     @property
@@ -62,7 +75,8 @@ class JobSettings:
 
     def channels(self):
         """Canales que se generan, en orden de impresión."""
-        active = set(PROCESS_CHANNELS) | ({'W'} if self.white_base else set())
+        base = MONO_CHANNELS if self.mode == 'mono' else PROCESS_CHANNELS
+        active = set(base) | ({'W'} if self.white_base else set())
         return [c for c in self.channel_order if c in active]
 
     def to_dict(self):
@@ -75,6 +89,7 @@ class JobSettings:
         # Rellenar canales que falten en archivos antiguos
         settings.angles = {**CMYK_ANGLES, **settings.angles}
         settings.thresholds = {**{c: NEUTRAL_THRESHOLD for c in 'CMYKW'}, **settings.thresholds}
+        settings.density = {**{c: 100.0 for c in 'CMYKW'}, **settings.density}
         return settings
 
     def save(self, path):

@@ -94,3 +94,22 @@ Correr las pruebas: `python -m unittest tests.test_core`
 | Baja | Separación por índices de color (simulated process) | Técnica más usada en textil oscuro que el CMYK puro |
 | Baja | Trama estocástica (FM) como opción para el blanco | Elimina el moiré entre la base y las tintas |
 | Baja | Exportar TIFF 1-bit con DPI | Formato estándar para RIP de película |
+
+---
+
+## 5. Interfaz (rediseño aplicado)
+
+Criterio: la interfaz es gris neutro y el único color saturado en pantalla es la tinta de cada canal, para que la interfaz no altere cómo percibes el color. La simulación se ve sobre gris medio, el entorno estándar de preprensa. El tema completo está en `src/ui/theme.py`.
+
+- **Orden del panel:** Imagen → Trama → Salida → Canales, que es el orden del trabajo.
+- **Acciones fijas:** "Separar colores" (Ctrl+R) y "Exportar positivos…" (Ctrl+S) quedan fijas abajo; antes se perdían al hacer scroll.
+- **Lista de canales:** cada pantalla muestra su muestra de tinta, nombre y ángulo de trama. Antes el texto blanco sobre amarillo era ilegible.
+- **Colores de simulación:** aproximaciones sRGB de tintas de cuatricromía en vez de primarios RGB puros, que sobresaturaban la vista previa.
+- **Detector de moiré:**
+  - Usaba malla 120 fija aunque el combo dijera otra; ahora lee la malla del LPI elegido.
+  - Advierte "Malla muy abierta" cuando la relación malla/LPI es menor de 3.5.
+- **Textos:** sin emojis, en minúscula inicial y con verbos que dicen lo que hace cada botón.
+
+Pendiente de interfaz:
+- Los diálogos (asistente, calculadora de LPI, análisis de moiré) siguen con su estilo anterior, con estilos en línea y degradados.
+- Mostrar en la barra de estado el tamaño físico y el LPI real del positivo después de separar.

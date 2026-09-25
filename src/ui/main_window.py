@@ -11,7 +11,7 @@ import cv2
 from PIL import Image
 from PyQt5 import QtWidgets, QtGui, QtCore
 import math
-from PyQt5 import QtWidgets, QtGui, QtCore
+import re
 
 # --- Importaciones de módulos locales (ajusta las rutas si es necesario) ---
 # Se asume una estructura de carpetas como:
@@ -39,6 +39,7 @@ from ..core.image_processing import (
 from ..utils.constants import *
 from ..utils.helpers import convert_units, format_dimension_display
 from .pdf_selector import PDFPageSelector
+from . import theme
 
 
 # --- Verificación de dependencias ---
@@ -79,6 +80,56 @@ class DraggableChannelList(QtWidgets.QListWidget):
         super().dropEvent(event)
         new_order = [self.item(i).text() for i in range(self.count())]
         self.orderChanged.emit(new_order)
+
+
+CHANNEL_NAMES = {'C': 'Cian', 'M': 'Magenta', 'Y': 'Amarillo', 'K': 'Negro', 'W': 'Base blanca'}
+
+
+class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
+    """
+    Pinta cada canal como una pantalla de la prensa: muestra de tinta, nombre y
+    ángulo de trama. El texto del item sigue siendo la letra del canal ('C', 'M'...)
+    porque el resto del código lo usa como identificador.
+    """
+    ROW_HEIGHT = 30
+
+    def __init__(self, color_for_channel, parent=None):
+        super().__init__(parent)
+        self._color_for_channel = color_for_channel
+
+    def sizeHint(self, option, index):
+        return QtCore.QSize(option.rect.width(), self.ROW_HEIGHT)
+
+    def paint(self, painter, option, index):
+        channel = index.data(QtCore.Qt.DisplayRole)
+        rect = option.rect
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+
+        selected = option.state & QtWidgets.QStyle.State_Selected
+        painter.fillRect(rect, QtGui.QColor("#DDE3F2") if selected else QtGui.QColor("white"))
+        painter.setPen(QtGui.QColor(theme.LINEA))
+        painter.drawLine(rect.bottomLeft(), rect.bottomRight())
+        if selected:
+            painter.fillRect(QtCore.QRect(rect.left(), rect.top(), 3, rect.height()),
+                             QtGui.QColor(theme.EMULSION))
+
+        # Muestra de tinta
+        swatch = QtCore.QRectF(rect.left() + 12, rect.top() + 6, 30, rect.height() - 12)
+        painter.setPen(QtGui.QPen(QtGui.QColor(theme.TEXTO_SUAVE), 1))
+        painter.setBrush(self._color_for_channel(channel))
+        painter.drawRoundedRect(swatch, 2, 2)
+
+        # Nombre y ángulo
+        text_rect = rect.adjusted(54, 0, -12, 0)
+        painter.setPen(QtGui.QColor(theme.TEXTO))
+        painter.drawText(text_rect, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft,
+                         CHANNEL_NAMES.get(channel, channel))
+        painter.setPen(QtGui.QColor(theme.TEXTO_SUAVE))
+        angle = CMYK_ANGLES.get(channel)
+        if angle is not None:
+            painter.drawText(text_rect, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight, f"{angle:g}°")
+        painter.restore()
 
 
 class AspectRatioPixmapLabel(QtWidgets.QLabel):
@@ -144,7 +195,9 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         # Label interno para mostrar la imagen
         self.image_label = QtWidgets.QLabel()
         self.image_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.image_label.setStyleSheet("border: 1px solid #ccc;")
+        self.setObjectName("vistaPrevia")
+        self.viewport().setStyleSheet(f"background: {theme.GRIS_PREPRENSA};")
+        self.image_label.setStyleSheet(f"background: {theme.GRIS_PREPRENSA};")
         self.setWidget(self.image_label)
         
         # Variables de zoom
@@ -168,56 +221,53 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         self.setup_zoom_controls()
         
     def setup_zoom_controls(self):
-        """Crear controles de zoom superpuestos"""
-        # Widget contenedor para controles
-        self.controls_widget = QtWidgets.QWidget(self)
-        self.controls_widget.setFixedSize(200, 80)
-        self.controls_widget.setStyleSheet("""
-            QWidget {
-                background-color: rgba(255, 255, 255, 230);
-                border: 1px solid #ccc;
-                border-radius: 5px;
-            }
+        """Barra de zoom compacta superpuesta en la esquina superior derecha."""
+        self.controls_widget = QtWidgets.QFrame(self)
+        self.controls_widget.setObjectName("barraZoom")
+        self.controls_widget.setStyleSheet(f"""
+            QFrame#barraZoom {{
+                background: {theme.SUPERFICIE};
+                border: 1px solid {theme.LINEA};
+                border-radius: 3px;
+            }}
+            QPushButton {{ padding: 0; min-height: 0; border-radius: 2px; }}
+            QLabel {{ color: {theme.TEXTO_SUAVE}; font-size: 9pt; }}
         """)
-        
-        # Layout de controles
-        controls_layout = QtWidgets.QVBoxLayout(self.controls_widget)
-        controls_layout.setContentsMargins(5, 5, 5, 5)
-        
-        # Etiqueta de zoom
-        self.zoom_label = QtWidgets.QLabel("Zoom: 100%")
-        self.zoom_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.zoom_label.setStyleSheet("font-weight: bold; font-size: 11px;")
-        controls_layout.addWidget(self.zoom_label)
-        
-        # Botones de zoom
-        button_layout = QtWidgets.QHBoxLayout()
-        
-        self.zoom_out_btn = QtWidgets.QPushButton("➖")
-        self.zoom_out_btn.setFixedSize(25, 25)
+
+        controls_layout = QtWidgets.QHBoxLayout(self.controls_widget)
+        controls_layout.setContentsMargins(6, 4, 6, 4)
+        controls_layout.setSpacing(4)
+
+        self.zoom_out_btn = QtWidgets.QPushButton("−")
+        self.zoom_out_btn.setFixedSize(26, 24)
+        self.zoom_out_btn.setToolTip("Alejar")
         self.zoom_out_btn.clicked.connect(self.zoom_out)
-        button_layout.addWidget(self.zoom_out_btn)
-        
-        self.zoom_fit_btn = QtWidgets.QPushButton("📐")
-        self.zoom_fit_btn.setFixedSize(25, 25)
-        self.zoom_fit_btn.setToolTip("Ajustar al tamaño")
-        self.zoom_fit_btn.clicked.connect(self.zoom_to_fit)
-        button_layout.addWidget(self.zoom_fit_btn)
-        
-        self.zoom_100_btn = QtWidgets.QPushButton("1:1")
-        self.zoom_100_btn.setFixedSize(25, 25)
-        self.zoom_100_btn.setToolTip("Zoom 100%")
-        self.zoom_100_btn.clicked.connect(self.zoom_to_100)
-        button_layout.addWidget(self.zoom_100_btn)
-        
-        self.zoom_in_btn = QtWidgets.QPushButton("➕")
-        self.zoom_in_btn.setFixedSize(25, 25)
+        controls_layout.addWidget(self.zoom_out_btn)
+
+        self.zoom_label = QtWidgets.QLabel("100%")
+        self.zoom_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.zoom_label.setMinimumWidth(44)
+        controls_layout.addWidget(self.zoom_label)
+
+        self.zoom_in_btn = QtWidgets.QPushButton("+")
+        self.zoom_in_btn.setFixedSize(26, 24)
+        self.zoom_in_btn.setToolTip("Acercar")
         self.zoom_in_btn.clicked.connect(self.zoom_in)
-        button_layout.addWidget(self.zoom_in_btn)
-        
-        controls_layout.addLayout(button_layout)
-        
-        # Posicionar controles en esquina superior derecha
+        controls_layout.addWidget(self.zoom_in_btn)
+
+        self.zoom_fit_btn = QtWidgets.QPushButton("Ajustar")
+        self.zoom_fit_btn.setFixedHeight(24)
+        self.zoom_fit_btn.setToolTip("Ver la imagen completa")
+        self.zoom_fit_btn.clicked.connect(self.zoom_to_fit)
+        controls_layout.addWidget(self.zoom_fit_btn)
+
+        self.zoom_100_btn = QtWidgets.QPushButton("1:1")
+        self.zoom_100_btn.setFixedHeight(24)
+        self.zoom_100_btn.setToolTip("Tamaño real en píxeles, para revisar la trama")
+        self.zoom_100_btn.clicked.connect(self.zoom_to_100)
+        controls_layout.addWidget(self.zoom_100_btn)
+
+        self.controls_widget.adjustSize()
         self.position_controls()
         
     def position_controls(self):
@@ -265,7 +315,7 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         
         # Actualizar etiqueta de zoom
         zoom_percent = int(self.zoom_factor * 100)
-        self.zoom_label.setText(f"Zoom: {zoom_percent}%")
+        self.zoom_label.setText(f"{zoom_percent}%")
         
     def wheelEvent(self, event):
         """Zoom con rueda del mouse"""
@@ -444,9 +494,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.load_databases()
 
         # --- 3. Definición de Constantes y Colores ---
+        # Aproximación sRGB de tintas de cuatricromía (process cyan/magenta/yellow).
+        # Los primarios RGB puros (0,255,255 / 255,0,255) sobresaturan la simulación.
         self.PURE_CMYK_COLORS = {
-            'C': QtGui.QColor(0, 255, 255), 'M': QtGui.QColor(255, 0, 255),
-            'Y': QtGui.QColor(255, 255, 0), 'K': QtGui.QColor(0, 0, 0),
+            'C': QtGui.QColor(0, 174, 239), 'M': QtGui.QColor(236, 0, 140),
+            'Y': QtGui.QColor(255, 242, 0), 'K': QtGui.QColor(35, 31, 32),
             'W': QtGui.QColor(255, 255, 255)
         }
         self.PURE_DEFAULT_THRESHOLDS = {
@@ -462,357 +514,310 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         print("✅ Interfaz inicializada.")
 
     def init_ui(self):
-        """Construye interfaz reorganizada y optimizada."""
+        """
+        Construye la interfaz. El panel izquierdo sigue el orden del trabajo
+        (imagen → trama → salida → canales) y las dos acciones principales
+        quedan fijas abajo, siempre visibles aunque el panel haga scroll.
+        """
+        self.setStyleSheet(theme.APP_QSS)
+
         central_widget = QtWidgets.QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QtWidgets.QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(0, 0, 8, 0)
+        main_layout.setSpacing(8)
 
-        # -- PANEL IZQUIERDO CON SCROLL --
+        def field_label(text):
+            label = QtWidgets.QLabel(text)
+            label.setProperty("rol", "campo")
+            return label
+
+        def secondary_label(text):
+            label = QtWidgets.QLabel(text)
+            label.setProperty("rol", "secundario")
+            label.setWordWrap(True)
+            return label
+
+        # -- PANEL IZQUIERDO: controles con scroll + barra de acciones fija --
+        left_panel = QtWidgets.QWidget()
+        left_panel.setFixedWidth(400)
+        left_layout = QtWidgets.QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+
         controls_scroll = QtWidgets.QScrollArea()
+        controls_scroll.setObjectName("panelControles")
         controls_scroll.setWidgetResizable(True)
-        controls_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         controls_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
-        controls_scroll.setMaximumWidth(480)  # Más ancho para evitar recortes
-        controls_scroll.setMinimumWidth(460)
 
-        # Widget contenedor para el scroll
         controls_container = QtWidgets.QWidget()
+        controls_container.setObjectName("contenedorControles")
         controls_layout = QtWidgets.QVBoxLayout(controls_container)
         controls_layout.setAlignment(QtCore.Qt.AlignTop)
-        controls_layout.setSpacing(6)  # Espaciado más compacto
-        controls_layout.setContentsMargins(8, 8, 8, 8)  # Márgenes reducidos
+        controls_layout.setSpacing(4)
+        controls_layout.setContentsMargins(10, 4, 10, 10)
 
-        # === SECCIÓN 1: BOTONES PRINCIPALES (SIEMPRE VISIBLES) ===
-        main_actions_group = QtWidgets.QGroupBox("🚀 Acciones Principales")
-        main_actions_layout = QtWidgets.QVBoxLayout(main_actions_group)
-        
-        # Botones en fila para ahorrar espacio - MEJORADO
-        buttons_row1 = QtWidgets.QHBoxLayout()
-        buttons_row1.setSpacing(8)
-        self.load_btn = QtWidgets.QPushButton("📂 Cargar")
+        # === IMAGEN ===
+        def compact_combo(combo):
+            combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            combo.setMinimumContentsLength(8)
+            combo.view().setMinimumWidth(240)
+            return combo
+
+        image_group = QtWidgets.QGroupBox("Imagen")
+        image_layout = QtWidgets.QVBoxLayout(image_group)
+        image_layout.setSpacing(6)
+
+        image_buttons = QtWidgets.QHBoxLayout()
+        self.load_btn = QtWidgets.QPushButton("Abrir imagen o PDF…")
         self.load_btn.clicked.connect(self.load_image_or_pdf)
-        self.load_btn.setMinimumHeight(40)  # Más altura
-        self.load_btn.setStyleSheet("font-weight: bold; font-size: 11px;")
-        buttons_row1.addWidget(self.load_btn)
-        
-        self.wizard_btn = QtWidgets.QPushButton("🧙‍♂️ Asistente")
+        image_buttons.addWidget(self.load_btn, 1)
+        self.wizard_btn = QtWidgets.QPushButton("Asistente")
+        self.wizard_btn.setToolTip("Recomienda malla, LPI y tinta según soporte y prenda")
         self.wizard_btn.clicked.connect(self.show_setup_wizard)
-        self.wizard_btn.setMinimumHeight(40)  # Más altura
-        self.wizard_btn.setStyleSheet("font-weight: bold; font-size: 11px;")
-        buttons_row1.addWidget(self.wizard_btn)
-        
-        buttons_row2 = QtWidgets.QHBoxLayout()
-        buttons_row2.setSpacing(8)
-        self.process_btn = QtWidgets.QPushButton("🚀 Procesar CMYK")
-        self.process_btn.clicked.connect(self.process_cmyk)
-        self.process_btn.setMinimumHeight(45)  # Más altura para botón principal
-        self.process_btn.setStyleSheet("font-weight: bold; background-color: #4CAF50; color: white; font-size: 12px;")
-        buttons_row2.addWidget(self.process_btn)
-        
-        self.save_btn = QtWidgets.QPushButton("💾 Guardar")
-        self.save_btn.clicked.connect(self.save_results)
-        self.save_btn.setMinimumHeight(45)  # Más altura para botón principal
-        self.save_btn.setStyleSheet("font-weight: bold; background-color: #2196F3; color: white; font-size: 12px;")
-        buttons_row2.addWidget(self.save_btn)
-        
-        main_actions_layout.addLayout(buttons_row1)
-        main_actions_layout.addLayout(buttons_row2)
-        controls_layout.addWidget(main_actions_group)
+        image_buttons.addWidget(self.wizard_btn)
+        image_layout.addLayout(image_buttons)
 
-        # === SECCIÓN 2: INFORMACIÓN DE IMAGEN (COMPACTA) ===
-        image_info_group = QtWidgets.QGroupBox("📐 Información de Imagen")
-        image_info_layout = QtWidgets.QVBoxLayout(image_info_group)
-        image_info_layout.setSpacing(2)  # Espaciado mínimo
-        image_info_layout.setContentsMargins(6, 6, 6, 6)  # Márgenes reducidos
-        
-        self.image_res_label = QtWidgets.QLabel("📐 Sin imagen")
-        self.image_res_label.setStyleSheet("font-size: 10px; color: #666; padding: 2px;")
-        self.image_res_label.setWordWrap(True)
-        image_info_layout.addWidget(self.image_res_label)
-        
-        self.complexity_label = QtWidgets.QLabel("🔍 Complejidad: N/A")
-        self.complexity_label.setStyleSheet("font-size: 10px; color: #666; padding: 2px;")
-        self.complexity_label.setWordWrap(True)
-        image_info_layout.addWidget(self.complexity_label)
-        
-        controls_layout.addWidget(image_info_group)
+        self.image_res_label = secondary_label("Ninguna imagen abierta")
+        image_layout.addWidget(self.image_res_label)
+        self.complexity_label = secondary_label("")
+        image_layout.addWidget(self.complexity_label)
+        controls_layout.addWidget(image_group)
 
-        # === SECCIÓN 3: PARÁMETROS TÉCNICOS (COMPACTA) ===
-        params_group = QtWidgets.QGroupBox("⚙️ Parámetros Técnicos")
+        # === TRAMA ===
+        params_group = QtWidgets.QGroupBox("Trama")
         params_layout = QtWidgets.QGridLayout(params_group)
-        params_layout.setSpacing(4)  # Espaciado compacto
-        params_layout.setContentsMargins(6, 6, 6, 6)  # Márgenes reducidos
-        params_layout.setVerticalSpacing(4)  # Espaciado vertical reducido
-        
-        # Forma y LPI con labels compactos
-        form_label = QtWidgets.QLabel("Forma:")
-        form_label.setStyleSheet("font-weight: bold; font-size: 10px;")
-        params_layout.addWidget(form_label, 0, 0)
-        self.shape_combo = QtWidgets.QComboBox()
-        self.shape_combo.addItems(list(POINT_SHAPES.keys()))
-        self.shape_combo.setMinimumHeight(26)  # Altura reducida
-        params_layout.addWidget(self.shape_combo, 0, 1)
-        
-        lpi_label = QtWidgets.QLabel("LPI:")
-        lpi_label.setStyleSheet("font-weight: bold; font-size: 10px;")
-        params_layout.addWidget(lpi_label, 1, 0)
-        self.lpi_combo = QtWidgets.QComboBox()
+        params_layout.setHorizontalSpacing(10)
+        params_layout.setVerticalSpacing(6)
+        params_layout.setColumnStretch(1, 1)
+
+        params_layout.addWidget(field_label("Lineatura"), 0, 0)
+        self.lpi_combo = compact_combo(QtWidgets.QComboBox())
         self.lpi_combo.addItems(list(LPI_VALUES.keys()))
-        self.lpi_combo.setMinimumHeight(26)  # Altura reducida
-        params_layout.addWidget(self.lpi_combo, 1, 1)
-        
-        res_label = QtWidgets.QLabel("Resolución:")
-        res_label.setStyleSheet("font-weight: bold; font-size: 10px;")
-        params_layout.addWidget(res_label, 2, 0)
-        self.resolution_combo = QtWidgets.QComboBox()
+        params_layout.addWidget(self.lpi_combo, 0, 1)
+
+        params_layout.addWidget(field_label("Forma de punto"), 1, 0)
+        self.shape_combo = compact_combo(QtWidgets.QComboBox())
+        self.shape_combo.addItems(list(POINT_SHAPES.keys()))
+        params_layout.addWidget(self.shape_combo, 1, 1)
+
+        params_layout.addWidget(field_label("Resolución"), 2, 0)
+        self.resolution_combo = compact_combo(QtWidgets.QComboBox())
         self.resolution_combo.addItems(list(RESOLUTION_ENHANCEMENT.keys()))
-        self.resolution_combo.setMinimumHeight(26)  # Altura reducida
         params_layout.addWidget(self.resolution_combo, 2, 1)
-        
+
+        self.moire_warning = MoireWarningWidget(self)
+        params_layout.addWidget(self.moire_warning, 3, 0, 1, 2)
         controls_layout.addWidget(params_group)
 
-        # === SECCIÓN 4: DETECTOR DE MOIRÉ (COMPACTO) ===
-        moire_group = QtWidgets.QGroupBox("🔍 Detector de Moiré")
-        moire_layout = QtWidgets.QVBoxLayout(moire_group)
-        moire_layout.setContentsMargins(4, 4, 4, 4)  # Márgenes mínimos
-        moire_layout.setSpacing(2)
-        self.moire_warning = MoireWarningWidget(self)
-        self.moire_warning.setFixedHeight(65)  # Altura fija compacta
-        moire_layout.addWidget(self.moire_warning)
-        controls_layout.addWidget(moire_group)
-
-        # === SECCIÓN 5: FORMATO (COMPACTO) ===
-        format_group = QtWidgets.QGroupBox("📄 Formato de Impresión")
+        # === SALIDA ===
+        format_group = QtWidgets.QGroupBox("Salida")
         format_layout = QtWidgets.QVBoxLayout(format_group)
-        format_layout.setSpacing(4)  # Espaciado reducido
-        format_layout.setContentsMargins(6, 6, 6, 6)
-        
-        # Combo de formato
-        self.print_format_combo = QtWidgets.QComboBox()
+        format_layout.setSpacing(6)
+
+        format_row = QtWidgets.QHBoxLayout()
+        format_row.addWidget(field_label("Formato"))
+        self.print_format_combo = compact_combo(QtWidgets.QComboBox())
         self.print_format_combo.addItems(list(PRINT_FORMATS.keys()) + ["Personalizado"])
         self.print_format_combo.currentIndexChanged.connect(self.on_print_format_changed)
-        self.print_format_combo.setMinimumHeight(26)
-        format_layout.addWidget(self.print_format_combo)
-        
-        # Info de formato compacta
-        self.format_info_label = QtWidgets.QLabel("Selecciona un formato")
-        self.format_info_label.setStyleSheet("font-size: 9px; padding: 2px; border: 1px solid #ccc; background: #f9f9f9;")
-        self.format_info_label.setWordWrap(True)
-        self.format_info_label.setMaximumHeight(35)  # Altura limitada
+        format_row.addWidget(self.print_format_combo, 1)
+        format_layout.addLayout(format_row)
+
+        self.format_info_label = secondary_label("")
         format_layout.addWidget(self.format_info_label)
-        
-        # Widget personalizado (más compacto)
+
         self.custom_size_widget = QtWidgets.QWidget()
         custom_layout = QtWidgets.QGridLayout(self.custom_size_widget)
-        custom_layout.setSpacing(2)
-        
-        self.unit_combo = QtWidgets.QComboBox()
+        custom_layout.setContentsMargins(0, 0, 0, 0)
+        custom_layout.setSpacing(6)
+        self.unit_combo = compact_combo(QtWidgets.QComboBox())
         self.unit_combo.addItems([f"{k} ({v['label']})" for k, v in MEASUREMENT_UNITS.items()])
-        custom_layout.addWidget(QtWidgets.QLabel("Unidad:"), 0, 0)
-        custom_layout.addWidget(self.unit_combo, 0, 1)
-        
         self.custom_width = QtWidgets.QDoubleSpinBox()
         self.custom_height = QtWidgets.QDoubleSpinBox()
         self.custom_dpi = QtWidgets.QSpinBox()
-        self.custom_dpi.setRange(72, 600)
+        self.custom_dpi.setRange(72, 1200)
         self.custom_dpi.setValue(300)
-        
-        custom_layout.addWidget(QtWidgets.QLabel("Ancho:"), 1, 0)
+        custom_layout.addWidget(field_label("Unidad"), 0, 0)
+        custom_layout.addWidget(self.unit_combo, 0, 1)
+        custom_layout.addWidget(field_label("Ancho"), 1, 0)
         custom_layout.addWidget(self.custom_width, 1, 1)
-        custom_layout.addWidget(QtWidgets.QLabel("Alto:"), 2, 0)
+        custom_layout.addWidget(field_label("Alto"), 2, 0)
         custom_layout.addWidget(self.custom_height, 2, 1)
-        custom_layout.addWidget(QtWidgets.QLabel("DPI:"), 3, 0)
+        custom_layout.addWidget(field_label("DPI"), 3, 0)
         custom_layout.addWidget(self.custom_dpi, 3, 1)
-        
         self.custom_size_widget.setVisible(False)
         format_layout.addWidget(self.custom_size_widget)
-        
-        controls_layout.addWidget(format_group)
 
-        # === SECCIÓN 6: OPCIONES DE PROCESAMIENTO (COMPACTAS) ===
-        options_group = QtWidgets.QGroupBox("🎛️ Opciones")
-        options_layout = QtWidgets.QGridLayout(options_group)
-        options_layout.setSpacing(4)  # Espaciado reducido
-        options_layout.setContentsMargins(6, 6, 6, 6)  # Márgenes reducidos
-        options_layout.setVerticalSpacing(4)  # Espaciado vertical mínimo
-        
-        self.white_base_cb = QtWidgets.QCheckBox("Base Blanca")
-        self.white_base_cb.setStyleSheet("font-size: 10px; font-weight: bold;")
-        self.fit_format_cb = QtWidgets.QCheckBox("Ajustar Formato")
-        self.fit_format_cb.setStyleSheet("font-size: 10px; font-weight: bold;")
-        self.guides_cb = QtWidgets.QCheckBox("Guías Registro")
-        self.guides_cb.setStyleSheet("font-size: 10px; font-weight: bold;")
-        self.show_halftones_cb = QtWidgets.QCheckBox("Ver Halftones")
-        self.show_halftones_cb.setStyleSheet("font-size: 10px; font-weight: bold;")
+        options_grid = QtWidgets.QGridLayout()
+        options_grid.setHorizontalSpacing(12)
+        options_grid.setVerticalSpacing(4)
+        self.fit_format_cb = QtWidgets.QCheckBox("Ajustar al formato")
+        self.fit_format_cb.setToolTip("Escala la imagen al papel y genera la trama a la resolución de salida")
+        self.guides_cb = QtWidgets.QCheckBox("Guías de registro")
+        self.white_base_cb = QtWidgets.QCheckBox("Base blanca")
+        self.white_base_cb.setToolTip("Para prenda oscura: se imprime primero y se contrae 2 px en los bordes")
+        self.show_halftones_cb = QtWidgets.QCheckBox("Ver trama")
         self.show_halftones_cb.setChecked(True)
         self.show_halftones_cb.stateChanged.connect(self.update_preview)
-        
-        options_layout.addWidget(self.white_base_cb, 0, 0)
-        options_layout.addWidget(self.fit_format_cb, 0, 1)
-        options_layout.addWidget(self.guides_cb, 1, 0)
-        options_layout.addWidget(self.show_halftones_cb, 1, 1)
-        
-        # Botón de color de prenda compacto
-        self.garment_color_btn = QtWidgets.QPushButton("🎨 Color Prenda")
-        self.garment_color_btn.clicked.connect(self.select_garment_color)
-        self.garment_color_btn.setMinimumHeight(28)  # Altura reducida
-        self.garment_color_btn.setStyleSheet("font-weight: bold; font-size: 10px;")
-        options_layout.addWidget(self.garment_color_btn, 2, 0, 1, 2)
-        
-        controls_layout.addWidget(options_group)
+        options_grid.addWidget(self.fit_format_cb, 0, 0)
+        options_grid.addWidget(self.guides_cb, 0, 1)
+        options_grid.addWidget(self.white_base_cb, 1, 0)
+        options_grid.addWidget(self.show_halftones_cb, 1, 1)
+        format_layout.addLayout(options_grid)
 
-        # === SECCIÓN 7: CANALES (COMPACTA) ===
-        channels_group = QtWidgets.QGroupBox("🎨 Ajustes de Canales")
+        self.garment_color_btn = QtWidgets.QPushButton("Color de la prenda…")
+        self.garment_color_btn.clicked.connect(self.select_garment_color)
+        format_layout.addWidget(self.garment_color_btn)
+        controls_layout.addWidget(format_group)
+
+        # === CANALES ===
+        channels_group = QtWidgets.QGroupBox("Canales")
         channels_layout = QtWidgets.QVBoxLayout(channels_group)
-        channels_layout.setContentsMargins(4, 4, 4, 4)  # Márgenes mínimos
-        channels_layout.setSpacing(2)
-        
-        # Pestañas compactas
+        channels_layout.setSpacing(6)
+
         channels_tabs = QtWidgets.QTabWidget()
-        channels_tabs.setMinimumHeight(280)  # Altura controlada
-        channels_tabs.setStyleSheet("QTabBar::tab { min-width: 70px; padding: 6px; font-weight: bold; font-size: 10px; }")
-        
-        # PESTAÑA 1: Lista de canales - COMPACTA
+
         channels_tab = QtWidgets.QWidget()
         channels_tab_layout = QtWidgets.QVBoxLayout(channels_tab)
-        channels_tab_layout.setSpacing(4)  # Espaciado reducido
-        channels_tab_layout.setContentsMargins(4, 4, 4, 4)
-        
-        self.view_individual_channel_cb = QtWidgets.QCheckBox("Ver canal individual")
-        self.view_individual_channel_cb.setStyleSheet("font-weight: bold; font-size: 10px;")
-        self.view_individual_channel_cb.stateChanged.connect(self.update_preview)
-        channels_tab_layout.addWidget(self.view_individual_channel_cb)
-        
-        help_label = QtWidgets.QLabel("<i>Arrastra para reordenar. Clic para ajustar.</i>")
-        help_label.setStyleSheet("font-size: 9px; color: #666; padding: 2px;")
-        help_label.setWordWrap(True)
-        channels_tab_layout.addWidget(help_label)
-        
+        channels_tab_layout.setSpacing(6)
+        channels_tab_layout.setContentsMargins(8, 8, 8, 8)
+
+        channels_tab_layout.addWidget(secondary_label(
+            "Orden de impresión de arriba abajo. Arrastra para cambiarlo; "
+            "selecciona un canal para ajustar su umbral."))
+
         self.channel_list = DraggableChannelList(self)
+        self.channel_list.setItemDelegate(
+            ChannelScreenDelegate(lambda ch: self.channel_colors.get(ch, QtGui.QColor("white")), self.channel_list))
         self.channel_list.orderChanged.connect(self.set_channel_order)
         self.channel_list.itemSelectionChanged.connect(self.on_channel_selection_changed)
-        self.channel_list.setMinimumHeight(120)  # Altura controlada
-        self.channel_list.setMaximumHeight(120)  # Altura máxima
+        self.channel_list.setFixedHeight(ChannelScreenDelegate.ROW_HEIGHT * 5 + 4)
         channels_tab_layout.addWidget(self.channel_list)
-        
-        # Umbral del canal seleccionado - COMPACTO
-        self.threshold_label = QtWidgets.QLabel("Umbral:")
-        self.threshold_label.setStyleSheet("font-weight: bold; font-size: 10px;")
-        channels_tab_layout.addWidget(self.threshold_label)
-        
+
+        self.view_individual_channel_cb = QtWidgets.QCheckBox("Ver solo el canal seleccionado")
+        self.view_individual_channel_cb.stateChanged.connect(self.update_preview)
+        channels_tab_layout.addWidget(self.view_individual_channel_cb)
+
+        threshold_row = QtWidgets.QHBoxLayout()
+        self.threshold_label = field_label("Umbral")
+        threshold_row.addWidget(self.threshold_label)
+        self.threshold_value_label = secondary_label("Selecciona un canal")
+        self.threshold_value_label.setWordWrap(False)
+        self.threshold_value_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        threshold_row.addWidget(self.threshold_value_label, 1)
+        channels_tab_layout.addLayout(threshold_row)
+
         self.threshold_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.threshold_slider.setRange(0, 255)
-        self.threshold_slider.setMinimumHeight(22)  # Altura reducida
         self.threshold_slider.sliderMoved.connect(self.on_threshold_slider_changed)
         self.threshold_slider.sliderReleased.connect(self._delayed_threshold_update)
         channels_tab_layout.addWidget(self.threshold_slider)
-        
-        self.threshold_value_label = QtWidgets.QLabel("Selecciona un canal")
-        self.threshold_value_label.setAlignment(QtCore.Qt.AlignCenter)
-        self.threshold_value_label.setStyleSheet("font-size: 10px; font-weight: bold; padding: 2px; background: #f0f0f0; border-radius: 3px;")
-        channels_tab_layout.addWidget(self.threshold_value_label)
-        
-        channels_tabs.addTab(channels_tab, "📋 Lista")
-        
-        # PESTAÑA 2: Colores de canales - COMPACTA
+
+        channels_tabs.addTab(channels_tab, "Orden y umbral")
+
         colors_tab = QtWidgets.QWidget()
         colors_tab_layout = QtWidgets.QGridLayout(colors_tab)
-        colors_tab_layout.setSpacing(4)  # Espaciado reducido
-        colors_tab_layout.setContentsMargins(4, 4, 4, 4)
-        colors_tab_layout.setVerticalSpacing(4)
-        
-        all_channels = ['C', 'M', 'Y', 'K', 'W']
-        channel_names = {'C': 'Cian', 'M': 'Magenta', 'Y': 'Amarillo', 'K': 'Negro', 'W': 'Blanco'}
-        
-        for i, ch in enumerate(all_channels):
-            label = QtWidgets.QLabel(f"{channel_names[ch]}")
-            label.setStyleSheet("font-size: 10px; font-weight: bold;")
-            colors_tab_layout.addWidget(label, i, 0)
-            
-            color_btn = QtWidgets.QPushButton("Color")
+        colors_tab_layout.setContentsMargins(8, 8, 8, 8)
+        colors_tab_layout.setHorizontalSpacing(8)
+        colors_tab_layout.setVerticalSpacing(6)
+        colors_tab_layout.setColumnStretch(1, 1)
+
+        for i, ch in enumerate(['C', 'M', 'Y', 'K', 'W']):
+            colors_tab_layout.addWidget(QtWidgets.QLabel(CHANNEL_NAMES[ch]), i, 0)
+
+            color_btn = QtWidgets.QPushButton("")
+            color_btn.setToolTip(f"Cambiar el color de simulación de {CHANNEL_NAMES[ch].lower()}")
             color_btn.clicked.connect(lambda _, c=ch: self.pick_channel_color(c))
-            color_btn.setMinimumHeight(26)  # Altura reducida
-            color_btn.setStyleSheet("font-weight: bold; font-size: 9px;")
             self.channel_color_buttons[ch] = color_btn
             colors_tab_layout.addWidget(color_btn, i, 1)
-            
-            restore_btn = QtWidgets.QPushButton("↺")
+
+            restore_btn = QtWidgets.QPushButton("Restaurar")
+            restore_btn.setToolTip("Volver al color de tinta por defecto")
             restore_btn.clicked.connect(lambda _, c=ch: self.restore_channel_color_default(c))
-            restore_btn.setMinimumWidth(35)  # Ancho reducido
-            restore_btn.setMinimumHeight(26)  # Altura reducida
-            restore_btn.setToolTip("Restaurar color por defecto")
-            restore_btn.setStyleSheet("font-weight: bold; font-size: 11px;")
             colors_tab_layout.addWidget(restore_btn, i, 2)
-        
-        channels_tabs.addTab(colors_tab, "🎨 Colores")
-        
+
+        channels_tabs.addTab(colors_tab, "Colores de tinta")
         channels_layout.addWidget(channels_tabs)
         controls_layout.addWidget(channels_group)
+        controls_layout.addStretch()
 
-        # === NO ESPACIADOR FINAL para aprovechar mejor el espacio ===
-        # controls_layout.addStretch()  # Comentado para evitar espacios vacíos
-
-        # Configurar el scroll
         controls_scroll.setWidget(controls_container)
+        left_layout.addWidget(controls_scroll, 1)
 
-        # -- PANEL DERECHO (VISTAS) --
-        views_panel = QtWidgets.QWidget()
-        views_layout = QtWidgets.QHBoxLayout(views_panel)
-        
-        original_group = QtWidgets.QGroupBox("Imagen Original")
+        # Barra de acciones fija
+        actions_bar = QtWidgets.QWidget()
+        actions_bar.setObjectName("barraAcciones")
+        actions_layout = QtWidgets.QHBoxLayout(actions_bar)
+        actions_layout.setContentsMargins(10, 10, 10, 10)
+        actions_layout.setSpacing(8)
+
+        self.process_btn = QtWidgets.QPushButton("Separar colores")
+        self.process_btn.setObjectName("accionPrincipal")
+        self.process_btn.setShortcut("Ctrl+R")
+        self.process_btn.setToolTip("Separa en C, M, Y, K (y base blanca) y genera la trama  (Ctrl+R)")
+        self.process_btn.clicked.connect(self.process_cmyk)
+        actions_layout.addWidget(self.process_btn, 1)
+
+        self.save_btn = QtWidgets.QPushButton("Exportar positivos…")
+        self.save_btn.setObjectName("accionSecundaria")
+        self.save_btn.setShortcut("Ctrl+S")
+        self.save_btn.setToolTip("Guarda un PNG por canal, los PDF y las especificaciones  (Ctrl+S)")
+        self.save_btn.clicked.connect(self.save_results)
+        actions_layout.addWidget(self.save_btn, 1)
+        left_layout.addWidget(actions_bar)
+
+        # -- VISTAS: original (pequeña) y vista previa (principal) --
+        original_group = QtWidgets.QGroupBox("Original")
         original_layout = QtWidgets.QVBoxLayout(original_group)
-        self.original_label = AspectRatioPixmapLabel("Cargue una imagen")
+        self.original_label = AspectRatioPixmapLabel("Abre una imagen o PDF\npara empezar")
+        self.original_label.setObjectName("vistaOriginal")
         original_layout.addWidget(self.original_label)
-        
-        preview_group = QtWidgets.QGroupBox("Vista Previa de Impresión")
+
+        preview_group = QtWidgets.QGroupBox("Simulación de impresión")
         preview_layout = QtWidgets.QVBoxLayout(preview_group)
         self.preview_label = ZoomablePreviewLabel()
         self.preview_label.setMinimumSize(400, 300)
         preview_layout.addWidget(self.preview_label)
-        
+
         splitter = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         splitter.addWidget(original_group)
         splitter.addWidget(preview_group)
-        splitter.setSizes([200, 200])
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 3)
+        splitter.setSizes([280, 840])
+
+        views_panel = QtWidgets.QWidget()
+        views_layout = QtWidgets.QVBoxLayout(views_panel)
+        views_layout.setContentsMargins(0, 4, 0, 8)
         views_layout.addWidget(splitter)
-        
-        # -- ENSAMBLAJE FINAL OPTIMIZADO --
-        main_layout.addWidget(controls_scroll)  # Panel con scroll
-        main_layout.addWidget(views_panel)
-        main_layout.setStretch(0, 0)  # Panel izquierdo tamaño fijo pero más ancho
-        main_layout.setStretch(1, 1)  # Panel derecho se expande
-        main_layout.setSpacing(8)  # Espacio entre paneles
+
+        main_layout.addWidget(left_panel)
+        main_layout.addWidget(views_panel, 1)
 
         # Barra de estado y menú
         self.status_bar = QtWidgets.QStatusBar()
         self.setStatusBar(self.status_bar)
-        
+        self.status_bar.showMessage("Abre una imagen o PDF para empezar")
+
         menu_bar = self.menuBar()
-        help_menu = menu_bar.addMenu("&Ayuda")
-        troubleshoot_action = QtWidgets.QAction("🩺 Solucionador", self)
-        troubleshoot_action.triggered.connect(self.show_troubleshooter)
-        help_menu.addAction(troubleshoot_action)
-        
-        lpi_calc_action = QtWidgets.QAction("🧮 Calculadora LPI", self)
+        tools_menu = menu_bar.addMenu("&Herramientas")
+        lpi_calc_action = QtWidgets.QAction("Calculadora de LPI…", self)
         lpi_calc_action.triggered.connect(self.show_lpi_calculator)
-        help_menu.addAction(lpi_calc_action)
+        tools_menu.addAction(lpi_calc_action)
+        troubleshoot_action = QtWidgets.QAction("Solucionador de problemas…", self)
+        troubleshoot_action.triggered.connect(self.show_troubleshooter)
+        tools_menu.addAction(troubleshoot_action)
 
         # Estado inicial
         self.threshold_slider.setEnabled(False)
         self.view_individual_channel_cb.setEnabled(False)
-        
-        # Inicializar UI
+
         self.update_channel_list_ui()
         self.update_all_color_buttons_ui()
-        
-        # Conectar señales del detector de moiré
+
         self.lpi_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.shape_combo.currentTextChanged.connect(self.update_moire_analysis)
-        
-        # Análisis inicial
         self.update_moire_analysis()
-
-        print("✅ Interfaz COMPACTA y optimizada cargada - espacios vacíos eliminados")
 
     def get_current_resolution_settings(self):
         """
@@ -839,16 +844,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.channel_list.clear()
         for ch in self.channel_order:
             item = QtWidgets.QListWidgetItem(ch)
-            item.setBackground(QtGui.QBrush(self.channel_colors[ch]))
-            # Lógica para texto legible (negro o blanco)
-            if self.channel_colors[ch].lightness() > 128:
-                item.setForeground(QtGui.QBrush(QtGui.QColor("black")))
-            else:
-                item.setForeground(QtGui.QBrush(QtGui.QColor("white")))
-            font = item.font()
-            font.setBold(True)
-            item.setFont(font)
-            item.setTextAlignment(QtCore.Qt.AlignCenter)
+            item.setToolTip(f"{CHANNEL_NAMES.get(ch, ch)}: arrastra para cambiar el orden de impresión")
             self.channel_list.addItem(item)
         self.channel_list.blockSignals(False)
 
@@ -913,7 +909,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                     channel = item.text()
                     if channel in self.channel_colors:
                         color = self.channel_colors[channel]
-                        item.setBackground(QtGui.QBrush(color))
+                        self.channel_list.viewport().update()
                         print(f"✅ Item {channel} actualizado en lista")
             for i in range(self.channel_list.count()):
                 item = self.channel_list.item(i)
@@ -921,7 +917,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                     channel = item.text()
                     if channel in self.channel_colors:
                         color = self.channel_colors[channel]
-                        item.setBackground(QtGui.QBrush(color))
+                        self.channel_list.viewport().update()
                         print(f"✅ Item {channel} actualizado en lista")
 
         except Exception as e:
@@ -1190,7 +1186,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 self.update_print_format_compatibility()
 
                 # Actualizar etiqueta de información
-                res_text = f"📄 PDF p.{page_num + 1} | {img_array.shape[1]}×{img_array.shape[0]}px | {resolution} DPI | {self.image_info['width_cm']:.1f}×{self.image_info['height_cm']:.1f}cm"
+                res_text = f"PDF, página {page_num + 1}, {img_array.shape[1]}×{img_array.shape[0]}px, {resolution} DPI, {self.image_info['width_cm']:.1f}×{self.image_info['height_cm']:.1f}cm"
                 self.image_res_label.setText(res_text)
 
                 self.status_bar.showMessage(f"✅ PDF cargado: página {page_num + 1}")
@@ -1291,7 +1287,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 
             # Extraer número de LPI
             lpi = int(lpi_text.split()[0])
-            mesh = 120
+            mesh_match = re.search(r"malla\s+(\d+)", lpi_text)
+            mesh = int(mesh_match.group(1)) if mesh_match else 120
             
             print(f"🔢 LPI: {lpi}, Malla: {mesh}, Ratio: {mesh/lpi:.3f}")
             
@@ -1340,7 +1337,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 dpi_x = dpi_y = 300
 
             # Actualizar información en la interfaz
-            res_text = f"📐 {w}×{h}px | {dpi_x:.0f} DPI | {width_cm:.1f}×{height_cm:.1f}cm | {file_size:.1f}MB"
+            res_text = f"{w}×{h}px, {dpi_x:.0f} DPI, {width_cm:.1f}×{height_cm:.1f}cm, {file_size:.1f}MB"
             self.image_res_label.setText(res_text)
 
             # Guardar información para uso posterior
@@ -1363,7 +1360,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         except Exception as e:
             print(f"⚠️ Error detectando resolución: {e}")
-            self.image_res_label.setText("📐 Resolución no detectada")
+            self.image_res_label.setText("Resolución no detectada")
             self.image_info = None
 
     def on_resolution_changed(self):
@@ -1398,9 +1395,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
             color = colors.get(complexity, "#666")
 
-            complexity_text = f"🔍 Complejidad: {complexity.upper()} - {recommendation}"
+            complexity_text = f"Detalle {complexity}: {recommendation}"
             self.complexity_label.setText(complexity_text)
-            self.complexity_label.setStyleSheet(f"color: {color}; font-size: 10px; padding: 2px; font-weight: bold;")
+            self.complexity_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
 
             print(f"📊 Análisis de imagen: {complexity} - {recommendation}")
 
@@ -1469,7 +1466,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
             # Mostrar información formateada
             dimension_text = format_dimension_display(width, height, unit)
-            self.format_info_label.setText(f"🎯 {dimension_text} @ {dpi} DPI")
+            self.format_info_label.setText(f"{dimension_text} @ {dpi} DPI")
             self.update_print_format_compatibility()
 
         except Exception as e:
@@ -1574,7 +1571,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 print_format = self.get_current_print_format()
                 dpi_rec = print_format.get("dpi_recommended", 300)
                 format_display = print_format.get("name", format_name)
-                self.format_info_label.setText(f"🎯 {dpi_rec} DPI recomendado para {format_display}")
+                self.format_info_label.setText(f"{dpi_rec} DPI recomendado para {format_display}")
 
             # Actualizar compatibilidad si hay imagen cargada
             if hasattr(self, 'image_info') and self.image_info:
@@ -1582,7 +1579,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 
         except Exception as e:
             print(f"⚠️ Error en cambio de formato: {e}")
-            self.format_info_label.setText("🎯 300 DPI recomendado")
+            self.format_info_label.setText("300 DPI recomendado")
 
     def update_print_format_compatibility(self):
         """Verificar compatibilidad entre imagen y formato de impresión - VERSIÓN CORREGIDA"""
@@ -1593,11 +1590,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                     print_format = self.get_current_print_format()
                     dpi_rec = print_format.get('dpi_recommended', 300)
                     format_name = print_format.get('name', 'Formato desconocido')
-                    self.format_info_label.setText(f"🎯 {dpi_rec} DPI recomendado para {format_name}")
-                    self.format_info_label.setStyleSheet("color: #666; font-size: 11px; padding: 5px;")
+                    self.format_info_label.setText(f"{dpi_rec} DPI recomendado para {format_name}")
+                    self.format_info_label.setStyleSheet(f"color: {theme.TEXTO_SUAVE}; font-size: 9pt;")
                 except Exception as e:
                     print(f"⚠️ Error actualizando formato: {e}")
-                    self.format_info_label.setText("🎯 300 DPI recomendado")
+                    self.format_info_label.setText("300 DPI recomendado")
             return
 
         try:
@@ -1630,12 +1627,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             format_display_name = print_format.get('name', 'Formato').split('(')[0].strip()
             compatibility_text = f"{status} para {format_display_name}"
             self.format_info_label.setText(compatibility_text)
-            self.format_info_label.setStyleSheet(f"color: {color}; font-size: 11px; padding: 5px; font-weight: bold;")
+            self.format_info_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
 
         except Exception as e:
             print(f"⚠️ Error calculando compatibilidad: {e}")
-            self.format_info_label.setText("🎯 300 DPI recomendado")
-            self.format_info_label.setStyleSheet("color: #666; font-size: 11px; padding: 5px;")
+            self.format_info_label.setText("300 DPI recomendado")
+            self.format_info_label.setStyleSheet(f"color: {theme.TEXTO_SUAVE}; font-size: 9pt;")
 
             try:
                 print_format = self.get_current_print_format()
@@ -1666,7 +1663,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
                 compatibility_text = f"{status} para {print_format['name'].split('(')[0].strip()}"
                 self.format_info_label.setText(compatibility_text)
-                self.format_info_label.setStyleSheet(f"color: {color}; font-size: 11px; padding: 5px; font-weight: bold;")
+                self.format_info_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
 
             except Exception as e:
                 print(f"Error calculando compatibilidad: {e}")
@@ -1850,7 +1847,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             
             # La información ya está calculada y guardada, solo la mostramos.
             info = self.image_info
-            res_text = f"📐 {info['width_px']}×{info['height_px']}px | {info['dpi_x']:.0f} DPI | {info['width_cm']:.1f}×{info['height_cm']:.1f}cm"
+            res_text = f"{info['width_px']}×{info['height_px']}px, {info['dpi_x']:.0f} DPI, {info['width_cm']:.1f}×{info['height_cm']:.1f}cm"
             self.image_res_label.setText(res_text)
 
     def show_channel(self, channel):
@@ -1927,7 +1924,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 
             # 1. ACTUALIZACIÓN INSTANTÁNEA de la UI (sin cálculos)
             self.channel_thresholds[self.current_channel] = value
-            self.threshold_value_label.setText(f"Valor: {value}")
+            self.threshold_value_label.setText(f"{value} / 255")
             
             # 2. CANCELAR timer anterior si existe
             self.threshold_timer.stop()
@@ -2420,7 +2417,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             
             # Actualizar etiqueta de valor
             if hasattr(self, 'threshold_value_label'):
-                self.threshold_value_label.setText(f"Valor: {new_threshold}")
+                self.threshold_value_label.setText(f"{new_threshold} / 255")
             
             print(f"🎯 UMBRAL CAMBIÓ: {self.current_channel} [{old_threshold} → {new_threshold}]")
             
@@ -2467,12 +2464,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.threshold_slider.blockSignals(True)
             self.threshold_slider.setValue(current_threshold)
             self.threshold_slider.blockSignals(False)
-            self.threshold_label.setText(f"Umbral del Canal <b>{self.current_channel}</b>:")
-            self.threshold_value_label.setText(f"Valor: {current_threshold}")
+            self.threshold_label.setText(f"Umbral de {CHANNEL_NAMES.get(self.current_channel, self.current_channel).lower()}")
+            self.threshold_value_label.setText(f"{current_threshold} / 255")
         else:
             self.current_channel = None
-            self.threshold_label.setText("Umbral del Canal:")
-            self.threshold_value_label.setText("Selecciona un canal para ajustar")
+            self.threshold_label.setText("Umbral")
+            self.threshold_value_label.setText("Selecciona un canal")
             # Si no hay un solo canal seleccionado, forzamos la vista de composición
             self.view_individual_channel_cb.setChecked(False)
             
@@ -4013,8 +4010,7 @@ class MoireWarningWidget(QtWidgets.QWidget):
     
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(65)  # Altura fija para evitar cambios de layout
-        self.setMinimumWidth(300)  # Ancho mínimo para evitar cortes
+        self.setMinimumHeight(52)
         self.risk_level = 'BAJO'
         self.risk_score = 0.0
         self.current_lpi = 0
@@ -4025,58 +4021,33 @@ class MoireWarningWidget(QtWidgets.QWidget):
         self.setup_ui()
         
     def setup_ui(self):
-        """Configurar interfaz del widget de alerta - MEJORADA Y CORREGIDA"""
+        """Franja de estado: barra lateral de color, veredicto, detalle y botón."""
+        self.setObjectName("detectorMoire")
+        self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
         layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)  # Márgenes ajustados
+        layout.setContentsMargins(10, 6, 8, 6)
         layout.setSpacing(8)
-        
-        # === ICONO DE ESTADO AJUSTADO ===
-        self.status_icon = QtWidgets.QLabel("🟢")
-        self.status_icon.setFixedSize(30, 30)  # Tamaño reducido
-        self.status_icon.setAlignment(QtCore.Qt.AlignCenter)
-        self.status_icon.setStyleSheet("font-size: 20px;")  # Tamaño de fuente ajustado
-        layout.addWidget(self.status_icon)
-        
-        # === INFORMACIÓN DE ESTADO AJUSTADA ===
+
+        # Se conserva para compatibilidad; el estado se comunica con color y texto
+        self.status_icon = QtWidgets.QLabel()
+        self.status_icon.setVisible(False)
+
         info_layout = QtWidgets.QVBoxLayout()
-        info_layout.setSpacing(1)  # Espaciado mínimo
+        info_layout.setSpacing(1)
         info_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.status_label = QtWidgets.QLabel("✅ Sin riesgo de moiré")
-        self.status_label.setStyleSheet("font-weight: bold; font-size: 11px; color: #2E7D32; margin: 0; padding: 0;")
-        self.status_label.setWordWrap(True)  # Permitir wrap
+
+        self.status_label = QtWidgets.QLabel("Moiré: sin analizar")
+        self.status_label.setWordWrap(True)
         info_layout.addWidget(self.status_label)
-        
-        self.detail_label = QtWidgets.QLabel("LPI y malla compatibles")
-        self.detail_label.setStyleSheet("font-size: 9px; color: #666; margin: 0; padding: 0;")
+
+        self.detail_label = QtWidgets.QLabel("")
+        self.detail_label.setProperty("rol", "secundario")
         self.detail_label.setWordWrap(True)
         info_layout.addWidget(self.detail_label)
-        
-        layout.addLayout(info_layout, 1)  # Dar prioridad de espacio
-        
-        # === BOTÓN DE ANÁLISIS AJUSTADO ===
-        self.analyze_btn = QtWidgets.QPushButton("📊 Análisis")
-        self.analyze_btn.setFixedSize(75, 40)  # Tamaño reducido
-        self.analyze_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 10px; 
-                font-weight: bold;
-                border: 2px solid #2196F3;
-                border-radius: 6px;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                           stop:0 #E3F2FD, stop:1 #BBDEFB);
-                color: #1976D2;
-                padding: 2px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                           stop:0 #BBDEFB, stop:1 #90CAF9);
-                border-color: #1976D2;
-            }
-            QPushButton:pressed {
-                background: #90CAF9;
-            }
-        """)
+        layout.addLayout(info_layout, 1)
+
+        self.analyze_btn = QtWidgets.QPushButton("Detalles")
+        self.analyze_btn.setToolTip("Ver el análisis completo y alternativas de LPI")
         self.analyze_btn.clicked.connect(self.show_detailed_analysis)
         layout.addWidget(self.analyze_btn)
         
@@ -4090,110 +4061,35 @@ class MoireWarningWidget(QtWidgets.QWidget):
         self.risk_score = analysis_result['risk_score']
         self.analysis_result = analysis_result
         
-        # === CONFIGURACIONES DE RIESGO AJUSTADAS ===
-        risk_configs = {
-            'CRITICO': {
-                'icon': '🔴', 
-                'text': '🚨 RIESGO CRÍTICO', 
-                'color': '#D32F2F',
-                'bg_color': '#FFEBEE',
-                'border_color': '#F44336'
-            },
-            'ALTO': {
-                'icon': '🟠', 
-                'text': '⚠️ ALTO riesgo', 
-                'color': '#F57C00',
-                'bg_color': '#FFF3E0',
-                'border_color': '#FF9800'
-            },
-            'MEDIO': {
-                'icon': '🟡', 
-                'text': '⚠️ Riesgo moderado', 
-                'color': '#F9A825',
-                'bg_color': '#FFFDE7',
-                'border_color': '#FBC02D'
-            },
-            'BAJO': {
-                'icon': '🟢', 
-                'text': '✅ Bajo riesgo', 
-                'color': '#388E3C',
-                'bg_color': '#E8F5E8',
-                'border_color': '#4CAF50'
-            }
+        texts = {
+            'CRITICO': 'Moiré: riesgo crítico',
+            'ALTO': 'Moiré: riesgo alto',
+            'MEDIO': 'Moiré: riesgo moderado',
+            'BAJO': 'Moiré: riesgo bajo',
         }
-        
-        config = risk_configs[self.risk_level]
-        
-        # === ACTUALIZAR ELEMENTOS VISUALES ===
-        self.status_icon.setText(config['icon'])
-        self.status_label.setText(config['text'])
-        self.status_label.setStyleSheet(f"font-weight: bold; font-size: 11px; color: {config['color']}; margin: 0; padding: 0;")
-        
-        # Detalle con información técnica más compacta
         ratio = mesh / lpi if lpi > 0 else 0
-        detail_text = f"LPI {lpi} vs Malla {mesh} (R:{ratio:.1f}) - {self.risk_score:.0%}"
-        self.detail_label.setText(detail_text)
-        
-        # === ESTILO DEL WIDGET AJUSTADO ===
-        widget_style = f"""
-            MoireWarningWidget {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                           stop:0 {config['bg_color']}, stop:1 {config['bg_color']}E0);
-                border: 2px solid {config['border_color']};
-                border-radius: 8px;
-                margin: 1px;
-                min-height: 65px;
-                max-height: 65px;
+        shown_level = self.risk_level
+        verdict = texts.get(self.risk_level, self.risk_level)
+        if 0 < ratio < 3.5 and self.risk_level in ('BAJO', 'MEDIO'):
+            # Por debajo de ~3.5 hilos por línea el punto pequeño no se sostiene
+            shown_level = 'ALTO'
+            verdict = "Malla muy abierta para esta lineatura"
+        color = theme.moire_style(shown_level)
+
+        self.status_label.setText(verdict)
+        self.status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
+
+        self.detail_label.setText(f"{lpi} LPI en malla {mesh}: relación {ratio:.1f} (se recomienda 3.5 a 5)")
+
+        self.setStyleSheet(f"""
+            QWidget#detectorMoire {{
+                background: white;
+                border: 1px solid {theme.LINEA};
+                border-left: 4px solid {color};
+                border-radius: 3px;
             }}
-        """
-        
-        self.setStyleSheet(widget_style)
-        
-        # === ACTUALIZAR ESTILO DEL BOTÓN SEGÚN RIESGO ===
-        if self.risk_level in ['CRITICO', 'ALTO']:
-            self.analyze_btn.setText("🚨 ¡Fix!")
-            self.analyze_btn.setStyleSheet("""
-                QPushButton {
-                    font-size: 10px; 
-                    font-weight: bold;
-                    border: 2px solid #F44336;
-                    border-radius: 6px;
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                               stop:0 #FFEBEE, stop:1 #FFCDD2);
-                    color: #C62828;
-                    padding: 2px;
-                }
-                QPushButton:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                               stop:0 #FFCDD2, stop:1 #EF9A9A);
-                    border-color: #C62828;
-                }
-                QPushButton:pressed {
-                    background: #EF9A9A;
-                }
-            """)
-        else:
-            self.analyze_btn.setText("📊 Info")
-            self.analyze_btn.setStyleSheet("""
-                QPushButton {
-                    font-size: 10px; 
-                    font-weight: bold;
-                    border: 2px solid #2196F3;
-                    border-radius: 6px;
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                               stop:0 #E3F2FD, stop:1 #BBDEFB);
-                    color: #1976D2;
-                    padding: 2px;
-                }
-                QPushButton:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                               stop:0 #BBDEFB, stop:1 #90CAF9);
-                    border-color: #1976D2;
-                }
-                QPushButton:pressed {
-                    background: #90CAF9;
-                }
-            """)
+        """)
+        self.analyze_btn.setText("Corregir…" if shown_level in ['CRITICO', 'ALTO'] else "Detalles")
         
     def show_detailed_analysis(self):
         """Mostrar análisis detallado en diálogo mejorado"""

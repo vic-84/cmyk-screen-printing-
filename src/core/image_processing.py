@@ -183,8 +183,8 @@ def resize_to_print_format(img, print_format, target_dpi, background=255):
         height_mm = print_format["height"]
         
         # Convertir a píxeles según DPI
-        width_px = int((width_mm / 25.4) * target_dpi)
-        height_px = int((height_mm / 25.4) * target_dpi)
+        width_px = round((width_mm / 25.4) * target_dpi)
+        height_px = round((height_mm / 25.4) * target_dpi)
         
         # Obtener dimensiones actuales
         if len(img.shape) == 3:
@@ -198,8 +198,9 @@ def resize_to_print_format(img, print_format, target_dpi, background=255):
         scale = min(scale_x, scale_y)
         
         # Nuevas dimensiones
-        new_w = int(current_w * scale)
-        new_h = int(current_h * scale)
+        # El lado que limita ocupa exactamente el papel; el otro conserva la proporción
+        new_w = min(width_px, round(current_w * scale))
+        new_h = min(height_px, round(current_h * scale))
         
         # Redimensionar imagen
         resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_CUBIC)

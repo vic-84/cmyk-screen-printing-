@@ -48,6 +48,9 @@ class JobSettings:
     paper_width_mm: float = 210.0
     paper_height_mm: float = 297.0
     fit_to_paper: bool = False
+    # DPI propio de la imagen: sin «ajustar al papel» se imprime a su tamaño
+    # físico (px / source_dpi). 0 = desconocido: 1 px de imagen = 1 px de salida.
+    source_dpi: float = 0.0
     registration_guides: bool = False
     guide_margin_mm: float = REGISTRATION_GUIDE_SETTINGS['margin_mm']
     guide_cross_mm: float = REGISTRATION_GUIDE_SETTINGS['cross_size_mm']
@@ -101,8 +104,9 @@ class JobSettings:
     @property
     def paper_px(self):
         """Tamaño del papel en píxeles al DPI de salida (ancho, alto)."""
-        return (int(self.paper_width_mm / 25.4 * self.dpi),
-                int(self.paper_height_mm / 25.4 * self.dpi))
+        # Redondeo (no truncado): 297 mm a 300 dpi = 3508 px, no 3507 (296.9 mm)
+        return (round(self.paper_width_mm / 25.4 * self.dpi),
+                round(self.paper_height_mm / 25.4 * self.dpi))
 
     def ink_channels(self):
         """Canales de tinta de la técnica actual (sin base blanca)."""

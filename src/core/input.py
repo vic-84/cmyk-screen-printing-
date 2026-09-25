@@ -206,14 +206,13 @@ def _load_eps(path, dpi, input_profile=None):
 
 
 def effective_dpi(image_shape, image_dpi, settings):
-    """
-    Resolución efectiva de la imagen al tamaño final. Con «Ajustar al papel»
-    la imagen se escala; sin él se imprime a su tamaño original.
-    """
-    h, w = image_shape[:2]
-    if settings.fit_to_paper:
-        return min(w / (settings.paper_width_mm / 25.4), h / (settings.paper_height_mm / 25.4))
-    return image_dpi * settings.resolution_factor
+    """Resolución real de la imagen al tamaño final impreso."""
+    from .separation import design_size_mm
+    job = settings
+    if image_dpi and not settings.source_dpi:
+        job = type(settings).from_dict({**settings.to_dict(), 'source_dpi': image_dpi})
+    width_mm, _ = design_size_mm(image_shape, job)
+    return image_shape[1] / (width_mm / 25.4) if width_mm > 0 else 0.0
 
 
 def resolution_advice(image_shape, image_dpi, settings):

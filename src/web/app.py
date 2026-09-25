@@ -30,7 +30,7 @@ from ..core import output
 from ..core import simulate as sim
 from ..core.color import detect_palette, match_library, read_library
 from ..core.job import JobSettings
-from ..core.separation import render
+from ..core.separation import design_size_mm, render
 from ..core.spot import default_needs_base, order_light_to_dark
 from ..utils.constants import (
     ANGLE_PRESETS, BASE_PRESETS, CMYK_ANGLES, LPI_OPTIONS, POINT_SHAPES, SEPARATION_MODES,
@@ -41,6 +41,7 @@ MAX_DOCUMENTS = 8
 MAX_UPLOAD_MB = 200
 
 PAPER_FORMATS = {
+    "Personalizado": (300, 400),
     "A4": (210, 297), "A3": (297, 420), "A3+": (329, 483), "Tabloide": (279.4, 431.8),
     "Carta": (215.9, 279.4), "Pecho 30×40 cm": (300, 400), "Espalda 35×45 cm": (350, 450),
 }
@@ -68,10 +69,13 @@ def _document(doc_id):
     return document
 
 
-def _settings(raw):
+def _settings(raw, document=None):
     try:
         data = json.loads(raw) if raw else {}
-        return JobSettings.from_dict(data)
+        job = JobSettings.from_dict(data)
+        if document is not None:
+            job.source_dpi = document.dpi   # tamaño propio de la imagen sin «ajustar al papel»
+        return job
     except (ValueError, TypeError) as e:
         raise HTTPException(400, f"Configuración inválida: {e}")
 
@@ -205,7 +209,7 @@ async def match(library: UploadFile = File(...), spot_colors: str = Form("[]")):
 def preview(doc_id: str = Form(...), settings: str = Form("{}"), view: str = Form("print"),
             steps: int = Form(-1), misregister_mm: float = Form(0.3)):
     document = _document(doc_id)
-    job = _settings(settings)
+    job = _settings(settings, document)
     channels, screens, scale = render(document.bgr, document.alpha, job, preview=True)
     printed = sim.simulate(channels, screens, job, _ink_colors(job), job.garment_rgb, scale=scale,
                            opacity=sim.INK_TYPES.get(job.ink_type, 0.25),
@@ -221,7 +225,8 @@ def preview(doc_id: str = Form(...), settings: str = Form("{}"), view: str = For
         printed = sim.dot_risk_overlay(printed, channels, job, scale)
     report = sim.quality_report(channels, job, scale)
     advice = doc_input.resolution_advice(document.bgr.shape, document.dpi, job)
-    return {"image": _png_base64(printed), "scale": scale,
+    design = design_size_mm(document.bgr.shape, job)
+    return {"image": _png_base64(printed), "scale": scale, "design_mm": [round(design[0], 1), round(design[1], 1)],
             "channels": [{"id": c, "name": job.channel_name(c), "angle": job.channel_angle(c),
                           "rgb": list(_ink_colors(job).get(c, (128, 128, 128)))} for c in job.channels()],
             "report": report, "resolution": {"level": advice[0], "message": advice[1]}}
@@ -230,7 +235,7 @@ def preview(doc_id: str = Form(...), settings: str = Form("{}"), view: str = For
 @app.post("/api/export")
 def export(doc_id: str = Form(...), settings: str = Form("{}")):
     document = _document(doc_id)
-    job = _settings(settings)
+    job = _settings(settings, document)
     _, screens, _ = render(document.bgr, document.alpha, job, preview=False)
     buffer = io.BytesIO()
     base_name = os.path.splitext(os.path.basename(document.path or "trabajo"))[0] or "trabajo"

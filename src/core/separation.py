@@ -41,6 +41,14 @@ def prepare_image(image, alpha, settings):
     # El ruido JPEG se limpia a la resolución original, donde está
     source = enhance.denoise(image, settings.denoise)
     working = enhance_image_resolution(source, settings.resolution_factor, settings.resolution_method)
+    if not settings.fit_to_paper and settings.source_dpi > 0:
+        # Sin ajustar: la imagen sale a su tamaño físico (px / DPI propio). La
+        # mejora de resolución solo aporta detalle, no cambia el tamaño.
+        target = (max(1, round(image.shape[1] * settings.dpi / settings.source_dpi)),
+                  max(1, round(image.shape[0] * settings.dpi / settings.source_dpi)))
+        if target != (working.shape[1], working.shape[0]):
+            shrink = target[0] < working.shape[1]
+            working = cv2.resize(working, target, interpolation=cv2.INTER_AREA if shrink else cv2.INTER_CUBIC)
     if alpha is not None:
         alpha = cv2.resize(alpha, (working.shape[1], working.shape[0]), interpolation=cv2.INTER_LINEAR)
 
@@ -54,6 +62,24 @@ def prepare_image(image, alpha, settings):
 
     working = enhance.sharpen(working, settings.sharpen)
     return working, alpha
+
+
+def design_size_mm(image_shape, settings):
+    """
+    Tamaño final del diseño impreso (ancho, alto) en mm, tal como saldrá en
+    la película. Con «ajustar al papel» se conserva la proporción: el lado que
+    limita ocupa el papel y el otro queda más corto.
+    """
+    h, w = image_shape[:2]
+    native_dpi = settings.source_dpi if settings.source_dpi > 0 else settings.dpi
+    native = (w / native_dpi * 25.4, h / native_dpi * 25.4)
+    native_px = (round(w * settings.dpi / native_dpi), round(h * settings.dpi / native_dpi))
+    if needs_paper_fit((native_px[1], native_px[0]), settings):
+        paper_w, paper_h = settings.paper_px
+        scale = min(paper_w / w, paper_h / h)
+        fitted = (min(paper_w, round(w * scale)), min(paper_h, round(h * scale)))
+        return fitted[0] / settings.dpi * 25.4, fitted[1] / settings.dpi * 25.4
+    return native
 
 
 def source_pixel_size(original_shape, prepared_shape):

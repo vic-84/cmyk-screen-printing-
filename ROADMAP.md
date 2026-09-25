@@ -204,3 +204,12 @@ Algunas marcas exigen separar con su perfil ICC. `src/core/icc.py`, sobre Little
 - EPS: Ghostscript instalado.
 - Lotes: `python -m src.cli trabajo.json imagenes/ -o salida/`.
 - Rendimiento medido (A3, 300 dpi): vista previa ~1–1.5 s, cambio de tono o umbral ~0.3–0.9 s, exportación de 5 positivos ~12 s. A 600 dpi o más, la separación y la trama se procesan por franjas para caber en memoria.
+
+## Medidas de salida (verificado)
+
+- La película sale exactamente del papel elegido (A4 = 210 × 297 mm, A3, Carta, Personalizado) a cualquier DPI (300/600/1200). Se redondea en lugar de truncar.
+- Personalizado acepta de 1 a 2000 mm en mm, cm o pulgadas. Al cambiar de unidad el valor se convierte, así que la medida no cambia. Antes el campo se cortaba a 99.99.
+- **Ajustar al formato**: el diseño llena el lado que limita y conserva la proporción. La UI, la web, el CLI y `especificaciones.txt` muestran el tamaño real del diseño.
+- **Sin ajustar**: el diseño sale a su tamaño físico, calculado con los DPI propios de la imagen. Un 736 × 1104 px a 72 dpi sale a 259.6 × 389.5 mm, también con la mejora de resolución. Antes salía a 62 × 93 mm.
+- Con guías de registro, si el diseño no cabe en el papel, se ajusta a él. Las guías agregan su margen fuera del papel.
+- Pruebas: `test_paper_sizes_are_rounded_not_truncated`, `test_fit_to_paper_fills_the_limiting_side_exactly`, `test_without_fit_the_image_prints_at_its_own_physical_size`, `test_custom_size_in_every_unit_reaches_the_film`, `test_export_matches_the_chosen_size`.

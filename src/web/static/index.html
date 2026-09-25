@@ -180,6 +180,9 @@
       <fieldset>
         <legend>Salida</legend>
         <div class="row"><label for="paper">Papel</label><select id="paper" class="span2"></select></div>
+        <div class="row" id="customRow" hidden><label for="customW">Medida (mm)</label>
+          <input type="number" id="customW" value="300" min="10" max="2000" step="0.5" aria-label="Ancho en mm">
+          <input type="number" id="customH" value="400" min="10" max="2000" step="0.5" aria-label="Alto en mm"></div>
         <div class="row"><label for="dpi">Resolución</label><select id="dpi" class="span2">
           <option>300</option><option>600</option><option>720</option><option>1200</option></select></div>
         <div class="row"><label for="format">Archivo</label><select id="format" class="span2">
@@ -238,7 +241,8 @@ function fillSelect(select, entries, selected) {
 }
 
 function currentSettings() {
-  const o = state.options, [pw, ph] = o.papers[$("paper").value];
+  const o = state.options, custom = $("paper").value === "Personalizado";
+  const [pw, ph] = custom ? [+$("customW").value, +$("customH").value] : o.papers[$("paper").value];
   const mode = $("mode").value;
   return {
     mode, mesh_tpi: meshTpi(), mesh_unit: $("meshUnit").value, lpi: +$("lpi").value,
@@ -333,6 +337,7 @@ async function runPreview() {
       if (thin.specks) parts.push(`${thin.specks} motas sueltas en ${inkName(id)} (sube «Limpiar motas»)`);
       if (thin.gaps > 0.002) parts.push(`${inkName(id)} tiene huecos de menos de ${rep.min_line_mm.toFixed(2)} mm que se taparán`);
     }
+    parts.unshift(`diseño ${r.design_mm[0].toFixed(1)} × ${r.design_mm[1].toFixed(1)} mm`);
     parts.push(`vista previa al ${(r.scale * 100).toFixed(0)} %`);
     setStatus(parts.join("; ") + ". " + r.resolution.message);
   } catch (e) {
@@ -432,6 +437,8 @@ async function init() {
   fillSelect($("substrate"), [["Personalizado", "Personalizado"], ...Object.keys(o.substrates).map(k => [k, k])]);
   fillSelect($("inkType"), Object.keys(o.ink_types).map(k => [k, k]));
   fillSelect($("paper"), Object.keys(o.papers).map(k => [k, k]), "A3");
+  $("paper").addEventListener("change", () => { $("customRow").hidden = $("paper").value !== "Personalizado"; });
+  $("customW").addEventListener("change", schedule); $("customH").addEventListener("change", schedule);
   fillSelect($("iccIntent"), o.intents.map(k => [k, k]));
   fillSelect($("base"), [...Object.keys(o.bases).map(k => [k, k]), ["Personalizada", "custom"]], "Base blanca");
   $("base").onchange = () => { if (o.bases[$("base").value]) $("baseColor").value = rgbToHex(o.bases[$("base").value]); schedule(); };

@@ -19,7 +19,7 @@ from src.core import input as doc_input
 from src.core import icc
 from src.core.job import JobSettings
 from src.core.screening import adjust_levels, halftone
-from src.core.separation import render
+from src.core.separation import design_size_mm, render
 from src.ui.main_window import SimpleHalftoneApp
 from src.utils.constants import LPI_VALUES, MEASUREMENT_UNITS, POINT_SHAPES, TOTAL_INK_LIMIT
 
@@ -580,6 +580,87 @@ class CoreTests(unittest.TestCase):
         report = sim.quality_report(kept, raw)["thin"]["S1"]
         self.assertEqual(report["specks"], 3)          # malla 120: mínimo 0.32 mm = 3.75 px
         self.assertLess(report["lines"], 0.005)        # el trazo grueso no cuenta como línea fina
+
+    # ---------------------------------------------------------------- medidas de salida
+
+    def test_paper_sizes_are_rounded_not_truncated(self):
+        self.assertEqual(JobSettings(paper_width_mm=297, paper_height_mm=420, dpi=300).paper_px, (3508, 4961))
+        self.assertEqual(JobSettings(paper_width_mm=210, paper_height_mm=297, dpi=600).paper_px, (4961, 7016))
+
+    def test_fit_to_paper_fills_the_limiting_side_exactly(self):
+        image = np.full((1104, 736, 3), 128, dtype=np.uint8)
+        settings = JobSettings(fit_to_paper=True, paper_width_mm=300, paper_height_mm=400, dpi=300)
+        _, screens, _ = render(image, None, settings)
+        paper_w, paper_h = settings.paper_px
+        self.assertEqual(screens["K"].shape, (paper_h, paper_w))
+        ink_rows = np.where((screens["K"] == 0).any(axis=1))[0]
+        width_mm, height_mm = design_size_mm(image.shape, settings)
+        self.assertAlmostEqual(height_mm, 400, delta=0.2)
+        self.assertAlmostEqual(width_mm, 400 * 736 / 1104, delta=0.3)
+        self.assertGreaterEqual(ink_rows.max() - ink_rows.min() + 1, paper_h - 2)
+
+    def test_without_fit_the_image_prints_at_its_own_physical_size(self):
+        image = np.full((1104, 736, 3), 128, dtype=np.uint8)   # 72 dpi → 259.6 × 389.5 mm
+        for factor in (1.0, 2.0):
+            settings = JobSettings(fit_to_paper=False, source_dpi=72, dpi=300, resolution_factor=factor)
+            _, screens, _ = render(image, None, settings)
+            h, w = screens["K"].shape
+            self.assertAlmostEqual(w / 300 * 25.4, 736 / 72 * 25.4, delta=0.2)
+            self.assertAlmostEqual(h / 300 * 25.4, 1104 / 72 * 25.4, delta=0.2)
+        width_mm, height_mm = design_size_mm(image.shape, settings)
+        self.assertAlmostEqual(width_mm, 259.6, delta=0.1)
+        # Con guías y papel A4 el diseño (26 × 39 cm) no cabe: se ajusta al papel
+        guided = JobSettings(fit_to_paper=False, source_dpi=72, dpi=300, registration_guides=True,
+                             paper_width_mm=210, paper_height_mm=297)
+        self.assertAlmostEqual(design_size_mm(image.shape, guided)[1], 297, delta=0.2)
+
+    def test_custom_size_in_every_unit_reaches_the_film(self):
+        window = SimpleHalftoneApp()
+        window._set_loaded_image(np.full((400, 300, 3), 90, dtype=np.uint8))
+        window.image_info = {"dpi_x": 150.0, "dpi_y": 150.0, "width_px": 300, "height_px": 400}
+        window.print_format_combo.setCurrentText("Personalizado")
+        window.fit_format_cb.setChecked(True)
+        units = [window.unit_combo.itemText(i).split()[0] for i in range(window.unit_combo.count())]
+        window.unit_combo.setCurrentIndex(units.index("mm"))
+        window.custom_width.setValue(300)
+        window.custom_height.setValue(400)
+        settings = window.job_settings()
+        self.assertEqual((settings.paper_width_mm, settings.paper_height_mm), (300, 400))
+        # Cambiar de unidad convierte el valor y conserva la medida
+        window.unit_combo.setCurrentIndex(units.index("cm"))
+        self.assertAlmostEqual(window.custom_width.value(), 30.0)
+        self.assertAlmostEqual(window.job_settings().paper_width_mm, 300, delta=0.5)
+        window.unit_combo.setCurrentIndex(units.index("in"))
+        self.assertAlmostEqual(window.job_settings().paper_height_mm, 400, delta=0.5)
+        window.custom_width.setValue(20)          # 20 in = 508 mm
+        self.assertAlmostEqual(window.job_settings().paper_width_mm, 508, delta=0.5)
+        self.assertIn("mm", window.design_size_label.text())
+        window.close()
+
+    def test_export_matches_the_chosen_size(self):
+        window = SimpleHalftoneApp()
+        window._set_loaded_image(np.full((1104, 736, 3), 100, dtype=np.uint8))
+        window.image_info = {"dpi_x": 72.0, "dpi_y": 72.0, "width_px": 736, "height_px": 1104, "file_path": "x.png"}
+        window.print_format_combo.setCurrentText("Personalizado")
+        window.custom_width.setValue(280)
+        window.custom_height.setValue(350)
+        window.fit_format_cb.setChecked(True)
+        window.guides_cb.setChecked(False)
+        window.process_cmyk()
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(QtWidgets.QFileDialog, "getExistingDirectory", return_value=folder), \
+                mock.patch.object(QtWidgets.QMessageBox, "information"):
+            window.save_results()
+            path = [f for f in os.listdir(folder) if f.startswith("POSITIVO_K")][0]
+            with Image.open(os.path.join(folder, path)) as im:
+                dpi = im.info["dpi"][0]
+                size_mm = (im.size[0] / dpi * 25.4, im.size[1] / dpi * 25.4)
+            spec = open(os.path.join(folder, [f for f in os.listdir(folder) if f.startswith("especificaciones")][0]),
+                        encoding="utf-8").read()
+        self.assertAlmostEqual(size_mm[0], 280, delta=0.1)
+        self.assertAlmostEqual(size_mm[1], 350, delta=0.1)
+        self.assertIn("Diseño impreso: 233.3 × 350.0 mm", spec)
+        window.close()
 
     def test_gray_base_is_named_and_simulated_with_its_color(self):
         red = [220, 30, 30]

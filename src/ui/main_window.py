@@ -33,7 +33,7 @@ from .pdf_selector import PDFPageSelector
 from . import theme
 from ..core.job import JobSettings
 from ..core.screening import screen_channel
-from ..core.separation import render
+from ..core.separation import design_size_mm, render
 from ..core import mesh as mesh_rules
 from ..core import output
 from ..core import icc
@@ -952,8 +952,19 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         custom_layout.addWidget(self.custom_height, 2, 1)
         custom_layout.addWidget(field_label("DPI"), 3, 0)
         custom_layout.addWidget(self.custom_dpi, 3, 1)
+        # Rango, decimales y unidad reales: sin esto Qt limita a 0–99.99 y
+        # un formato de 300 × 400 mm se recortaba a 99.99 mm
+        self.setup_dimension_spinbox(self.custom_width, "mm")
+        self.setup_dimension_spinbox(self.custom_height, "mm")
+        self.custom_width.setValue(300)
+        self.custom_height.setValue(400)
+        self.unit_combo.currentIndexChanged.connect(self.on_unit_changed)
+        for control in (self.custom_width, self.custom_height, self.custom_dpi):
+            control.valueChanged.connect(self.on_output_size_changed)
         self.custom_size_widget.setVisible(False)
         format_layout.addWidget(self.custom_size_widget)
+        self.design_size_label = secondary_label("")
+        format_layout.addWidget(self.design_size_label)
 
         options_grid = QtWidgets.QGridLayout()
         options_grid.setHorizontalSpacing(12)
@@ -1265,7 +1276,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.smooth_edges_cb.stateChanged.connect(self.schedule_reseparation)
         self.input_profile_combo.currentIndexChanged.connect(self.on_input_profile_changed)
         self.lpi_combo.currentTextChanged.connect(lambda *_: self.update_resolution_advice())
-        self.fit_format_cb.stateChanged.connect(lambda *_: self.update_resolution_advice())
+        self.fit_format_cb.stateChanged.connect(self.on_output_size_changed)
+        self.output_dpi_combo.currentIndexChanged.connect(self.on_output_size_changed)
         self.print_format_combo.currentIndexChanged.connect(lambda *_: self.update_resolution_advice())
         self.ink_limit_spin.valueChanged.connect(self.schedule_reseparation)
         for control in (self.trap_spin, self.spot_softness_spin, self.spot_tolerance_spin, self.index_resolution_spin,
@@ -1559,12 +1571,32 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         notes = "; ".join(document.notes)
         self.status_bar.showMessage(f"Abierto: {os.path.basename(file_path)}" + (f". {notes}" if notes else ""), 10000)
 
+    def on_output_size_changed(self, *_):
+        """El tamaño del papel cambió: aviso de resolución, tamaño del diseño y vista previa."""
+        self.update_resolution_advice()
+        if self.preview_cache:
+            self.schedule_reseparation()
+
+    def design_size_text(self, settings=None):
+        if self.image is None:
+            return ""
+        settings = settings or self.job_settings()
+        width, height = design_size_mm(self.image.shape, settings)
+        native_dpi = settings.source_dpi if settings.source_dpi > 0 else settings.dpi
+        native_w = self.image.shape[1] / native_dpi * 25.4
+        if settings.fit_to_paper or abs(width - native_w) > 0.05:
+            return (f"El diseño sale de {width:.1f} × {height:.1f} mm dentro del papel de "
+                    f"{settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm (se conserva la proporción).")
+        return f"El diseño sale a su tamaño propio: {width:.1f} × {height:.1f} mm."
+
     def update_resolution_advice(self):
         """Resolución efectiva al tamaño final frente a la lineatura elegida."""
         if self.image is None or not self.image_info:
             return
-        level, message = doc_input.resolution_advice(self.image.shape, self.image_info.get('dpi_x', 72),
-                                                     self.job_settings())
+        settings = self.job_settings()
+        if hasattr(self, 'design_size_label'):
+            self.design_size_label.setText(self.design_size_text(settings))
+        level, message = doc_input.resolution_advice(self.image.shape, self.image_info.get('dpi_x', 72), settings)
         color = {'ok': theme.ESTADO_OK, 'aviso': theme.ESTADO_ALERTA, 'riesgo': theme.ESTADO_RIESGO}[level]
         self.complexity_label.setText(message)
         self.complexity_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
@@ -2407,6 +2439,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             paper_width_mm=float(print_format["width"]),
             paper_height_mm=float(print_format["height"]),
             fit_to_paper=self.fit_format_cb.isChecked(),
+            source_dpi=float((self.image_info or {}).get('dpi_x') or 0),
             registration_guides=self.guides_cb.isChecked(),
             denoise=self.denoise_combo.currentData(),
             sharpen=self.sharpen_spin.value(),
@@ -2722,6 +2755,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             if thin['gaps'] > 0.002:
                 parts.append(f"{self.channel_display_name(channel)} tiene huecos de menos de "
                              f"{report['min_line_mm']:.2f} mm que se taparán")
+        if self.image is not None:
+            width, height = design_size_mm(self.image.shape, settings)
+            parts.insert(0, f"diseño {width:.1f} × {height:.1f} mm")
         parts.append(f"vista previa al {self.preview_scale:.0%}")
         self.status_bar.showMessage("Separado: " + "; ".join(parts) + ".")
 
@@ -3257,14 +3293,16 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             saved_files.append(spec_name)
 
             height_px, width_px = positives[0].shape
-            size_mm = f"{width_px / settings.dpi * 25.4:.0f}×{height_px / settings.dpi * 25.4:.0f} mm"
+            size_mm = f"{width_px / settings.dpi * 25.4:.1f}×{height_px / settings.dpi * 25.4:.1f} mm"
+            design_w, design_h = design_size_mm(self.image.shape, settings)
             self.status_bar.showMessage(
                 f"Exportados {len(settings.channels())} positivos de {size_mm} a {settings.dpi} DPI en {folder_path}",
                 15000)
             QtWidgets.QMessageBox.information(
                 self, "Positivos exportados",
                 f"{len(saved_files)} archivos en:\n{folder_path}\n\n"
-                f"Positivos de {size_mm} a {settings.dpi} DPI, {settings.lpi:g} LPI.\n\n"
+                f"Película de {size_mm} a {settings.dpi} DPI, {settings.lpi:g} LPI.\n"
+                f"Diseño impreso: {design_w:.1f} × {design_h:.1f} mm.\n\n"
                 + "\n".join(saved_files))
 
         except Exception as e:
@@ -3288,6 +3326,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             f.write(f"  Papel: {settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm\n")
             f.write(f"  Positivo: {width_px} × {height_px} px = "
                     f"{width_px / settings.dpi * 25.4:.1f} × {height_px / settings.dpi * 25.4:.1f} mm\n")
+            design_w, design_h = design_size_mm(self.image.shape, settings)
+            f.write(f"  Diseño impreso: {design_w:.1f} × {design_h:.1f} mm\n")
             f.write(f"  Resolución: {settings.dpi} DPI\n")
             f.write(f"  Ajustar al papel: {'sí' if settings.fit_to_paper else 'no'}\n")
             f.write(f"  Guías de registro: {'sí' if settings.registration_guides else 'no'}\n")

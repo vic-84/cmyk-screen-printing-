@@ -948,23 +948,27 @@ class CoreTests(unittest.TestCase):
 
     # ---------------------------------------------------------------- prenda como negro
 
-    def test_garment_as_black_drops_k_and_opens_the_base_only_in_strong_blacks(self):
-        # Franjas: blanco, gris claro, gris medio, negro
-        image = np.zeros((40, 160, 3), dtype=np.uint8)
-        for i, v in enumerate((255, 190, 110, 10)):
+    def test_garment_as_black_drops_k_and_draws_grays_with_the_base(self):
+        # Franjas: blanco, gris claro, gris medio, gris oscuro, negro
+        image = np.zeros((40, 200, 3), dtype=np.uint8)
+        for i, v in enumerate((255, 190, 110, 60, 10)):
             image[:, i * 40:(i + 1) * 40] = v
         base = dict(mode="cmyk", white_base=True, garment_rgb=[20, 20, 22], lpi=20)
-        normal = render(image, None, JobSettings(**base))[0]
-        black = render(image, None, JobSettings(garment_as_black=True, garment_black_threshold=25, **base))[0]
+        black = render(image, None, JobSettings(garment_as_black=True, **base))[0]
         self.assertEqual(JobSettings(garment_as_black=True, **base).channels(), ["W", "Y", "C", "M"])
         self.assertNotIn("K", black)
         col = lambda ch, i: int(ch[20, i * 40 + 20])
-        self.assertEqual(col(black["W"], 0), col(normal["W"], 0))     # el blanco conserva toda la base
-        self.assertEqual(col(black["W"], 3), 0)                       # el negro queda de la prenda
-        self.assertTrue(all(col(black[n], 3) == 0 for n in "CMY"))    # sin CMY donde no hay base
-        # Un umbral más alto conserva más base en los grises
-        high = render(image, None, JobSettings(garment_as_black=True, garment_black_threshold=60, **base))[0]
-        self.assertGreaterEqual(col(high["W"], 2), col(black["W"], 2))
+        # La base baja con la luz de la imagen: los grises quedan dibujados con base
+        levels = [col(black["W"], i) for i in range(5)]
+        self.assertEqual(levels[0], 255)
+        self.assertTrue(levels[0] > levels[1] > levels[2] > levels[3] > 0)
+        self.assertEqual(levels[4], 0)                                # el negro es la tela
+        self.assertTrue(all(col(black[n], 4) == 0 for n in "CMY"))    # sin CMY donde no hay base
+        # Más sombra = menos base en los grises oscuros; refuerzo = grises más claros
+        dark = render(image, None, JobSettings(garment_as_black=True, garment_black_shadow=30, **base))[0]
+        self.assertLess(col(dark["W"], 3), levels[3])
+        boost = render(image, None, JobSettings(garment_as_black=True, garment_black_boost=50, **base))[0]
+        self.assertGreater(col(boost["W"], 2), levels[2])
 
     def test_garment_as_black_only_applies_to_cmyk_with_base(self):
         self.assertFalse(JobSettings(garment_as_black=True, white_base=False).uses_garment_as_black)

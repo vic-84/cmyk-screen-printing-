@@ -177,29 +177,40 @@ def separate_channels(bgr, alpha, settings, scale=1.0, source_px=1.0):
             bgr, settings.white_base_threshold,
             int(round(settings.white_base_choke_px * scale)), alpha)
     if settings.uses_garment_as_black:
-        garment_as_black(channels, settings.garment_black_threshold)
+        garment_as_black(channels, bgr, alpha, settings, scale)
     return channels
 
 
-GARMENT_BLACK_RAMP = 0.5    # la base baja de 100 % a 0 % a lo largo de 50 puntos de K
+GARMENT_BLACK_WHITE_POINT = 0.85   # desde esta luz la base va al 100 %
 
 
-def garment_as_black(channels, threshold):
+def garment_as_black(channels, bgr, alpha, settings, scale=1.0):
     """
     Prenda como negro (4 estaciones en prenda oscura): se elimina la película K
     y la tela hace de negro.
 
-    - La base se retira solo donde el negro pasa de threshold %, así los
-      blancos y las sombras suaves conservan su base y no se agrisan.
-    - C, M y Y se recortan donde ya no queda base: sobre la tela oscura sin
-      base no se verían y solo gastarían tinta.
+    Sin negro impreso, la base es la que dibuja los grises: su cantidad sigue
+    la luz de la imagen (puntos de blanco sobre la tela), no el canal K. Así
+    el cabello, el humo y los encajes conservan su detalle.
+    - Por debajo de garment_black_shadow % de luz no hay base: se ve la tela.
+    - garment_black_boost aclara los grises intermedios.
+    - C, M y Y se recortan donde no queda base: sobre la tela oscura sin base
+      no se verían y solo gastarían tinta.
     Modifica channels en el lugar.
     """
-    k = channels.pop('K').astype(np.float32) / 255.0
-    remove = np.clip((k - threshold / 100.0) / GARMENT_BLACK_RAMP, 0.0, 1.0)
-    base = channels['W'].astype(np.float32) * (1.0 - remove)
-    channels['W'] = np.round(base).astype(np.uint8)
-    cover = np.clip(base / 255.0 * 1.5, 0.0, 1.0)
+    channels.pop('K', None)
+    value = bgr.max(axis=2).astype(np.float32) / 255.0
+    shadow = min(settings.garment_black_shadow / 100.0, GARMENT_BLACK_WHITE_POINT - 0.05)
+    base = np.clip((value - shadow) / (GARMENT_BLACK_WHITE_POINT - shadow), 0.0, 1.0)
+    base = np.power(base, 1.0 / (1.0 + settings.garment_black_boost / 100.0))
+    if alpha is not None:
+        base *= alpha.astype(np.float32) / 255.0
+    base = np.round(base * 255).astype(np.uint8)
+    choke = int(round(settings.white_base_choke_px * scale))
+    if choke > 0:
+        base = cv2.erode(base, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (choke * 2 + 1, choke * 2 + 1)))
+    channels['W'] = base
+    cover = np.clip(base.astype(np.float32) / 255.0 * 1.5, 0.0, 1.0)
     for name in 'CMY':
         channels[name] = np.round(channels[name] * cover).astype(np.uint8)
 

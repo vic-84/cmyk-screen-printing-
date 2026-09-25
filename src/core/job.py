@@ -99,9 +99,10 @@ class JobSettings:
     white_base_threshold: int = WHITE_BASE_SETTINGS['opacity_threshold']
     white_base_choke_px: int = WHITE_BASE_SETTINGS['choke_pixels']
     # Cuatricromía en prenda oscura con 4 estaciones: no se imprime el negro, la
-    # tela hace de K. La base se retira donde el negro pasa de este %.
+    # tela hace de K y la base dibuja los grises (puntos de blanco sobre la tela).
     garment_as_black: bool = False
-    garment_black_threshold: float = 25.0
+    garment_black_shadow: float = 12.0   # % de luz por debajo del cual no hay base
+    garment_black_boost: float = 0.0     # % de refuerzo de los grises (aclara los medios)
 
     # Color plano: [{'id', 'name', 'rgb', 'halftone', 'opaque', 'base', 'library'}]
     spot_colors: list = field(default_factory=list)

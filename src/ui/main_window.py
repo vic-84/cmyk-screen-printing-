@@ -864,22 +864,30 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         # Cuatricromía en prenda oscura con 4 estaciones: la tela hace de negro
         self.garment_black_cb = QtWidgets.QCheckBox("Usar la prenda como negro (sin película K)")
         self.garment_black_cb.setToolTip(
-            "Para pulpos de 4 estaciones en prenda oscura: base + C + M + Y. No se imprime el negro; "
-            "la base se retira donde el diseño es negro y ahí se ve la tela.\n"
-            "Se pierden los grises finos que daba el negro: haz una prueba en prenda.")
+            "Para pulpos de 4 estaciones en prenda oscura: base + C + M + Y. No se imprime el negro: "
+            "la tela hace de negro y la base dibuja los grises con su trama.\n"
+            "Haz una prueba en prenda antes de producir.")
         substrate_layout.addWidget(self.garment_black_cb, 6, 0, 1, 2)
-        self.garment_black_label = field_label("Sin base desde")
+        self.garment_black_label = field_label("Sin base bajo")
         substrate_layout.addWidget(self.garment_black_label, 7, 0)
         self.garment_black_spin = QtWidgets.QDoubleSpinBox()
-        self.garment_black_spin.setRange(0, 90)
+        self.garment_black_spin.setRange(0, 60)
         self.garment_black_spin.setDecimals(0)
-        self.garment_black_spin.setSuffix(" % de negro")
-        self.garment_black_spin.setValue(25)
+        self.garment_black_spin.setSuffix(" % de luz")
+        self.garment_black_spin.setValue(12)
         self.garment_black_spin.setToolTip(
-            "Desde qué % de negro se quita la base para que se vea la prenda.\n"
-            "Más bajo: más zonas quedan del negro de la tela (más contraste, menos grises).\n"
-            "Más alto: conserva más grises con base y CMY, pero las sombras quedan menos negras.")
+            "Por debajo de esta luz no se imprime base: ahí queda el negro de la tela.\n"
+            "Más bajo: más detalle en sombras (cabello, humo). Más alto: sombras más negras y limpias.")
         substrate_layout.addWidget(self.garment_black_spin, 7, 1)
+        self.garment_boost_label = field_label("Refuerzo de grises")
+        substrate_layout.addWidget(self.garment_boost_label, 8, 0)
+        self.garment_boost_spin = QtWidgets.QDoubleSpinBox()
+        self.garment_boost_spin.setRange(0, 100)
+        self.garment_boost_spin.setDecimals(0)
+        self.garment_boost_spin.setSuffix(" %")
+        self.garment_boost_spin.setToolTip("Aclara los grises intermedios de la base (0 % = proporcional a la imagen).")
+        substrate_layout.addWidget(self.garment_boost_spin, 8, 1)
+        self.garment_boost_spin.valueChanged.connect(self.schedule_reseparation)
         for control in (self.garment_black_cb, self.white_base_cb):
             control.stateChanged.connect(self.on_garment_black_changed)
         self.garment_black_spin.valueChanged.connect(self.schedule_reseparation)
@@ -1971,8 +1979,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         available = mode == 'cmyk' and self.white_base_cb.isChecked()
         self.garment_black_cb.setEnabled(available)
         active = available and self.garment_black_cb.isChecked()
-        self.garment_black_spin.setEnabled(active)
-        self.garment_black_label.setEnabled(active)
+        for widget in (self.garment_black_spin, self.garment_black_label,
+                       self.garment_boost_spin, self.garment_boost_label):
+            widget.setEnabled(active)
 
     def on_garment_black_changed(self, *_):
         self.update_garment_black_controls()
@@ -2382,7 +2391,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             resolution_method=resolution.get("method"),
             white_base=self.white_base_cb.isChecked(),
             garment_as_black=self.garment_black_cb.isChecked(),
-            garment_black_threshold=self.garment_black_spin.value(),
+            garment_black_shadow=self.garment_black_spin.value(),
+            garment_black_boost=self.garment_boost_spin.value(),
             ink_limit=self.ink_limit_spin.value(),
             icc_profile=self.icc_profile_combo.currentData() or '',
             icc_intent=self.icc_intent_combo.currentText(),
@@ -2479,7 +2489,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.distress_spin.setValue(settings.distress_mm)
         self.white_base_cb.setChecked(settings.white_base)
         self.garment_black_cb.setChecked(settings.garment_as_black)
-        self.garment_black_spin.setValue(settings.garment_black_threshold)
+        self.garment_black_spin.setValue(settings.garment_black_shadow)
+        self.garment_boost_spin.setValue(settings.garment_black_boost)
         self.channel_thresholds.update(settings.thresholds)
         self.set_channel_order(list(settings.channel_order))
         self.print_format_combo.setCurrentText("Personalizado")
@@ -3001,8 +3012,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                           else f'en margen de {settings.guide_margin_mm:g} mm')
             f.write(f"  Guías de registro: {guides}\n")
             if settings.uses_garment_as_black:
-                f.write(f"  Prenda como negro: sin película K; base retirada desde "
-                        f"{settings.garment_black_threshold:g} % de negro\n")
+                f.write(f"  Prenda como negro: sin película K; base por luminosidad, sin base bajo "
+                        f"{settings.garment_black_shadow:g} % de luz, refuerzo de grises "
+                        f"{settings.garment_black_boost:g} %\n")
             if settings.distress_mm > 0:
                 f.write(f"  Efecto desgastado: {settings.distress_mm:g} mm de borde\n")
             f.write("\nTRAMA\n")

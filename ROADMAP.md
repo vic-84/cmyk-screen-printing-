@@ -256,7 +256,10 @@ Algunas marcas exigen separar con su perfil ICC. `src/core/icc.py`, sobre Little
 ## Prenda como negro (cuatricromía en 4 estaciones)
 
 - Opción en Sustrato y tinta, solo para cuatricromía con base. Elimina la película K y la tela oscura hace de negro: se imprime base + C + M + Y.
-- La base se retira solo donde el negro pasa del % elegido (25 % por defecto), así los blancos no se agrisan.
-- C, M y Y se recortan donde ya no queda base, porque sobre la tela sin base no se verían.
-- Prueba con la catrina: ΔE 11.7 contra 12.9 del normal de 5 marcos. Se pierden los grises finos del cabello y del fondo. **Pendiente: prueba en prenda real.**
+- Sin negro impreso, **la base dibuja los grises**: su cantidad sigue la luz de la imagen (puntos de blanco sobre la tela), no el canal K. Una primera versión quitaba la base según K y perdía el cabello y el humo del fondo.
+- Controles:
+  - *Sin base bajo* (12 % de luz): más bajo da más detalle en las sombras.
+  - *Refuerzo de grises* (0 %): aclara los medios.
+- C, M y Y se recortan donde no queda base.
+- Prueba con la catrina: ΔE 11.6 contra 12.9 del normal de 5 marcos, conservando el detalle del cabello. **Pendiente: prueba en prenda real** con los kits A (5 marcos), B (base por luz) y C (refuerzo 25 %).
 - El PDF de películas ahora se guarda en 1 bit, sin pérdida: pasó de 22.6 a 2.7 MB en A3.

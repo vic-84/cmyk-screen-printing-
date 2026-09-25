@@ -135,7 +135,10 @@ class JobSettings:
     def guide_margin_px(self):
         if not self.registration_guides or self.guides_in_blank:
             return 0
-        return round(self.guide_margin_mm / 25.4 * self.dpi)
+        # Nunca más de un cuarto del lado menor: en un lienzo chico el diseño
+        # quedaría de 1 px sin aviso
+        limit = min(self.paper_px) // 4
+        return min(round(self.guide_margin_mm / 25.4 * self.dpi), limit)
 
     def ink_channels(self):
         """Canales de tinta de la técnica actual (sin base blanca)."""

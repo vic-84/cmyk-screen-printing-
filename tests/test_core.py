@@ -785,6 +785,23 @@ class CoreTests(unittest.TestCase):
         self.assertFalse(settings.guides_in_blank)
         self.assertAlmostEqual(design_size_mm(image.shape, settings)[0], 300 - 24, delta=0.2)
 
+    def test_distress_wears_the_outline_not_thin_strokes_on_transparent_art(self):
+        from src.core.enhance import distress_edges
+        dpi = 150
+        alpha = np.zeros((600, 600), dtype=np.uint8)
+        for x in range(100, 500, 60):                      # barras de 6 mm con fondo transparente
+            alpha[100:500, x:x + 35] = 255
+        worn = distress_edges(alpha, alpha.shape, 15, dpi / 25.4)
+        inner = slice(250, 350)
+        # El centro de la composición conserva sus trazos; solo se desgasta el contorno
+        np.testing.assert_array_equal(worn[inner, 250:350], alpha[inner, 250:350])
+        self.assertGreater((worn == 255).sum(), 0.4 * (alpha == 255).sum())   # antes: 0 %
+
+    def test_guide_margin_never_eats_a_small_canvas(self):
+        settings = JobSettings(placement="fit", registration_guides=True, paper_width_mm=25, paper_height_mm=25)
+        placed = layout((100, 100, 3), settings)
+        self.assertGreaterEqual(placed.mm(settings.dpi)[0], 12)
+
     def test_full_bleed_design_without_blank_space_reports_missing_guides(self):
         image = np.zeros((400, 300, 3), dtype=np.uint8)
         settings = JobSettings(mode="mono", placement="fit", registration_guides=True, guide_position="blank",

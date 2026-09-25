@@ -96,8 +96,17 @@ def distress_edges(alpha, shape, width_mm, px_per_mm, seed=7):
         opaque = np.full((gh, gw), 255, dtype=np.uint8)
     else:
         opaque = np.where(cv2.resize(alpha, (gw, gh), interpolation=cv2.INTER_AREA) >= 128, 255, 0).astype(np.uint8)
-    # Distancia al borde del diseño (el contorno del lienzo cuenta como borde)
-    padded = cv2.copyMakeBorder(opaque, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+    # Se desgasta el contorno EXTERIOR de la composición, no cada trazo: con
+    # fondo transparente, las letras y líneas finas desaparecerían y los
+    # huecos interiores se comerían. Se unen las piezas cercanas y se
+    # rellenan los huecos para obtener la silueta.
+    reach = max(3, int(round(width_mm * mm_px)) | 1)
+    merged = cv2.morphologyEx(opaque, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (reach, reach)))
+    contours, _ = cv2.findContours(merged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    silhouette = np.zeros_like(opaque)
+    cv2.drawContours(silhouette, contours, -1, 255, cv2.FILLED)
+    # Distancia al borde de la silueta (el contorno del lienzo cuenta como borde)
+    padded = cv2.copyMakeBorder(silhouette, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
     distance = cv2.distanceTransform(padded, cv2.DIST_L2, 5)[1:-1, 1:-1] / mm_px
     # El 20 % exterior queda limpio: ahí caben las guías
     ramp = np.clip((distance / width_mm - 0.2) / 0.8, 0.0, 1.0)

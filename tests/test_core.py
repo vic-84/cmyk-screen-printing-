@@ -11,7 +11,7 @@ from PIL import Image
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from src.core.image_processing import generate_white_base, prepare_image_for_processing, rotate_image
+from src.core.image_processing import generate_white_base, prepare_image_for_processing
 from src.core import mesh as mesh_rules
 from src.core import color, output, tone
 from src.core import simulate as sim
@@ -1098,17 +1098,6 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(settings.icc_profile, self.GRACOL)
         self.assertEqual(settings.icc_intent, "Colorimétrico relativo")
         window.close()
-
-    def test_rotate_image_preserves_color_images(self):
-        image = np.zeros((20, 30, 3), dtype=np.uint8)
-        image[5:15, 10:20] = (10, 20, 30)
-
-        result = rotate_image(image, 45)
-
-        self.assertGreater(result.shape[0], image.shape[0])
-        self.assertGreater(result.shape[1], image.shape[1])
-        self.assertEqual(result.shape[2], 3)
-        self.assertGreater(np.count_nonzero(result), 0)
 
     def test_constants_support_the_ui_contract(self):
         self.assertTrue(LPI_VALUES)

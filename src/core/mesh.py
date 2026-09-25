@@ -69,3 +69,14 @@ def assess(mesh_tpi, lpi):
         return 'aviso', (f"Relación entera ({ratio:.2f}): riesgo de moiré con la malla. "
                          f"Prueba {suggested_lpi(mesh_tpi)} LPI.")
     return 'ok', f"{ratio:.1f} hilos por línea: dentro del rango recomendado."
+
+
+def alternatives(mesh_tpi, lpi, count=5):
+    """
+    LPI enteros dentro del rango recomendado y sin relación entera con la
+    malla, del más cercano al LPI actual al más lejano.
+    """
+    low, high = suggested_lpi_range(mesh_tpi)
+    options = [value for value in range(max(1, int(low)), int(high) + 1)
+               if low <= value <= high and not is_integer_ratio(mesh_tpi, value) and value != round(lpi)]
+    return sorted(options, key=lambda value: (abs(value - lpi), value))[:count]

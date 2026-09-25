@@ -54,7 +54,7 @@ Correr las pruebas: `python -m unittest tests.test_core`
    - Tres generadores de trama sin uso: `generate_halftone_pattern`, `generate_simple_halftone_pattern` (con un tamaño de celda distinto por canal) y `generate_quick_halftone`.
    - `create_circular_dots` no tiene `self`.
    - `_resize_and_center_for_output` y las funciones de `core/halftone.py` no se usan.
-   - `src/ui/main_window.txt` es una versión antigua: bórrala para no confundirte.
+   - (Hecho) Se borró `src/ui/main_window.txt`, la copia antigua de la interfaz.
 6. **Scripts auxiliares rotos o desactualizados.**
    - `contar_lpi.py` busca `LPI_VALUES = {` en `main_window.py`; ya no existe ahí y el script termina con "No se pudo encontrar".
    - `RESUMEN_EXPANSION_LPI.md` habla de 35 valores (lista 34), pero la app genera 21, **con LPI repetidos** (35 LPI aparece con malla 90, 110 y 120).

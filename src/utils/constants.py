@@ -1,4 +1,3 @@
-# Origen: claude_test_fixed_lpi.py
 # Sección: Variables globales de configuración y constantes
 
 
@@ -96,69 +95,6 @@ APPLICATION_CATEGORIES = {
     }
 }
 
-# Formatos de impresión estándar con múltiples unidades
-PRINT_FORMATS = {
-    "A4 (210×297mm)": {"width": 210, "height": 297, "dpi_recommended": 300, "unit": "mm"},
-    "A3 (297×420mm)": {"width": 297, "height": 420, "dpi_recommended": 300, "unit": "mm"},
-    "A3+ (329×483mm)": {"width": 329, "height": 483, "dpi_recommended": 300, "unit": "mm"}, 
-    "A2 (420×594mm)": {"width": 420, "height": 594, "dpi_recommended": 300, "unit": "mm"},
-    "A1 (594×841mm)": {"width": 594, "height": 841, "dpi_recommended": 200, "unit": "mm"},
-    "A0 (841×1189mm)": {"width": 841, "height": 1189, "dpi_recommended": 150, "unit": "mm"},
-    "Letter (8.5×11in)": {"width": 8.5, "height": 11, "dpi_recommended": 300, "unit": "in"},
-    "Legal (8.5×14in)": {"width": 8.5, "height": 14, "dpi_recommended": 300, "unit": "in"},
-    "Tabloid (11×17in)": {"width": 11, "height": 17, "dpi_recommended": 300, "unit": "in"},
-    "Póster 50×70cm": {"width": 50, "height": 70, "dpi_recommended": 150, "unit": "cm"},
-    "Póster 70×100cm": {"width": 70, "height": 100, "dpi_recommended": 120, "unit": "cm"},
-    "Banner 100×200cm": {"width": 100, "height": 200, "dpi_recommended": 100, "unit": "cm"},
-    "Playera S (45×60cm)": {"width": 45, "height": 60, "dpi_recommended": 200, "unit": "cm"},
-    "Playera M (50×70cm)": {"width": 50, "height": 70, "dpi_recommended": 200, "unit": "cm"},
-    "Playera L (55×75cm)": {"width": 55, "height": 75, "dpi_recommended": 200, "unit": "cm"},
-    "Playera XL (60×80cm)": {"width": 60, "height": 80, "dpi_recommended": 200, "unit": "cm"},
-    "Personalizado": {"width": 210, "height": 297, "dpi_recommended": 300, "unit": "mm"}
-}
-
-# Unidades de medida disponibles
-MEASUREMENT_UNITS = {
-    "mm": {
-        "label": "Milímetros",
-        "name": "Milímetros",
-        "symbol": "mm",
-        "to_mm_factor": 1.0,
-        "precision": 0,
-        "step": 1,
-        "range": (10, 5000)
-    },
-    "cm": {
-        "label": "Centímetros",
-        "name": "Centímetros",
-        "symbol": "cm",
-        "to_mm_factor": 10.0,
-        "precision": 1,
-        "step": 0.1,
-        "range": (1.0, 500.0)
-    },
-    "in": {
-        "label": "Pulgadas",
-        "name": "Pulgadas",
-        "symbol": "in",
-        "to_mm_factor": 25.4,
-        "precision": 2,
-        "step": 0.01,
-        "range": (0.5, 200.0)
-    }
-}
-
-# Configuración de guías de registro
-REGISTRATION_GUIDE_SETTINGS = {
-    "margin_mm": 15,          # Margen desde el borde del papel
-    "cross_size_mm": 8,       # Tamaño de las cruces de registro
-    "corner_marks": True,     # Marcas en las esquinas
-    "center_marks": True,     # Marcas en los centros de los lados
-    "bleed_marks": True,      # Marcas de sangrado
-    "color_bars": True,       # Barras de color para control
-    "info_text": True         # Información técnica
-}
-
 POINT_SHAPES = {
     "Redonda": "circle",
     "Elíptica": "ellipse",
@@ -192,7 +128,6 @@ SEPARATION_MODES = {
     "Cuatricromía + planos": "cmyk_spot",
 }
 SPOT_PALETTE_MODES = ("spot", "index", "cmyk_spot")
-CHANNEL_NAMES = ["C", "M", "Y", "K", "W"]  # Incluimos base blanca
 
 # Configuraciones de resolución
 RESOLUTION_ENHANCEMENT = {
@@ -215,7 +150,8 @@ WHITE_BASE_SETTINGS = {
 # Separación de color
 GCR_AMOUNT = 0.8        # Fracción del gris común (min C,M,Y) que se pasa a negro
 TOTAL_INK_LIMIT = 260   # Límite de tinta total (TAC) en %, textil: 240-280
-# Agregar esto al inicio de tu archivo main_window.py o en constants.py
+
+# Formatos de lienzo (mm)
 
 PRINT_FORMATS = {
     'A4': {
@@ -278,26 +214,6 @@ MEASUREMENT_UNITS = {
     }
 }
 
-def convert_units(value, from_unit, to_unit):
-    """Convertir entre unidades de medida"""
-    # Convertir todo a mm primero
-    to_mm_factors = {
-        'mm': 1.0,
-        'cm': 10.0,
-        'in': 25.4
-    }
-    
-    if from_unit not in to_mm_factors or to_unit not in to_mm_factors:
-        return value
-    
-    # Convertir a mm
-    value_mm = value * to_mm_factors[from_unit]
-    
-    # Convertir a la unidad destino
-    result = value_mm / to_mm_factors[to_unit]
-    
-    return result
-
 REGISTRATION_GUIDE_SETTINGS = {
     "margin_mm": 15,          # Margen para guías en mm
     "cross_size_mm": 8,       # Tamaño de cruces de registro en mm
@@ -307,11 +223,6 @@ REGISTRATION_GUIDE_SETTINGS = {
     "line_thickness": 2       # Grosor de líneas
 }
 
-def format_dimension_display(width, height, unit):
-    """Formatear dimensiones para mostrar"""
-    unit_info = MEASUREMENT_UNITS.get(unit, {'symbol': unit})
-    symbol = unit_info.get('symbol', unit)
-    return f"{width:.1f}×{height:.1f}{symbol}"
 
 
 # Bases bajo el color: la blanca da el color más brillante en prenda oscura;

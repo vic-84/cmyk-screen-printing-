@@ -1,5 +1,4 @@
-# Origen: claude_test_fixed_lpi.py
-# Versión: FINAL CORREGIDA Y REESTRUCTURADA
+"""Ventana principal de la app de separación de color para serigrafía (PyQt5)."""
 
 import os
 import json
@@ -8,30 +7,12 @@ import numpy as np
 import cv2
 from PyQt5 import QtWidgets, QtGui, QtCore
 
-# --- Importaciones de módulos locales (ajusta las rutas si es necesario) ---
-# Se asume una estructura de carpetas como:
-# main.py
-# src/
-#  - core/
-#    - halftone.py
-#    - image_processing.py
-#  - ui/
-#    - main_window.py  <-- ESTE ARCHIVO
-#    - pdf_selector.py
-#  - utils/
-#    - constants.py
-#    - helpers.py
-#  - data/
-#    - inks.json
-#    - squeegees.json
-#    - troubleshooting.json
-
-from ..core.image_processing import detect_image_complexity, prepare_image_for_processing
+from ..core.image_processing import prepare_image_for_processing
 from ..utils.constants import *
-from ..utils.helpers import convert_units, format_dimension_display
+from ..utils.helpers import convert_units
 from .pdf_selector import PDFPageSelector
 from . import theme
-from ..core.job import JobSettings
+from ..core.job import CHANNEL_NAMES, JobSettings
 from ..core.screening import screen_channel
 from ..core.separation import design_size_mm, layout, render
 from ..core import mesh as mesh_rules
@@ -43,20 +24,6 @@ from ..core.simulate import INK_TYPES, SUBSTRATE_PROFILES
 from ..core.color import detect_palette, lab_to_rgb, match_library, read_library, rgb_to_lab, write_ase
 from ..core.spot import default_needs_base, order_light_to_dark
 
-
-# --- Verificación de dependencias ---
-try:
-    import fitz  # PyMuPDF
-    PDF_SUPPORT = True
-    print("✅ Soporte PDF habilitado (PyMuPDF)")
-except ImportError:
-    try:
-        from pdf2image import convert_from_path
-        PDF_SUPPORT = True
-        print("✅ Soporte PDF habilitado (pdf2image)")
-    except ImportError:
-        PDF_SUPPORT = False
-        print("⚠️ Soporte PDF no disponible. Instala: pip install PyMuPDF")
 
 # =====================================================================
 # == CLASES DE WIDGETS PERSONALIZADOS
@@ -84,7 +51,6 @@ class DraggableChannelList(QtWidgets.QListWidget):
         self.orderChanged.emit(new_order)
 
 
-CHANNEL_NAMES = {'C': 'Cian', 'M': 'Magenta', 'Y': 'Amarillo', 'K': 'Negro', 'W': 'Base blanca'}
 
 
 class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
@@ -434,25 +400,6 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
             self.setCursor(QtCore.Qt.ArrowCursor)
         super().mouseReleaseEvent(event)
         
-    def get_mouse_image_position(self, mouse_pos):
-        """Convertir posición del mouse a coordenadas de la imagen original"""
-        if self.original_pixmap.isNull():
-            return None
-            
-        # Obtener posición relativa en el label de imagen
-        label_pos = self.image_label.mapFromParent(mouse_pos)
-        
-        # Convertir a coordenadas de imagen original
-        scaled_size = self.image_label.pixmap().size()
-        original_size = self.original_pixmap.size()
-        
-        scale_x = original_size.width() / scaled_size.width()
-        scale_y = original_size.height() / scaled_size.height()
-        
-        image_x = int(label_pos.x() * scale_x)
-        image_y = int(label_pos.y() * scale_y)
-        
-        return QtCore.QPoint(image_x, image_y)
 
 # =====================================================================
 # == CLASE PRINCIPAL DE LA APLICACIÓN
@@ -483,7 +430,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         # --- 1. Inicialización de Variables de Trabajo (PRIMERO) ---
         self.db_inks = []
         self.db_squeegees = []
-        self.db_troubleshooting = {}
         self.channel_color_buttons = {}
         self.image = None
         self.image_alpha = None
@@ -499,6 +445,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         os.makedirs(self.output_dir, exist_ok=True)
         self.channel_order = ['W', 'Y', 'C', 'M', 'K']
         self.is_preview_updating = False
+        self._guide_plan_cache = None
         self.current_channel = None
         
         # Timer para umbrales
@@ -506,14 +453,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.threshold_timer.setSingleShot(True)
         self.threshold_timer.timeout.connect(self._delayed_threshold_update)
 
-        # Detector de moiré - SOLO UNA VEZ
-        self.moire_detector = MoireDetector()
         self.moire_warning = None
-
-        # DEBUG: Prueba rápida
-        print("🔍 Detector de moiré creado")
-        test_analysis = self.moire_detector.analyze_moire_risk(25, 120, {})
-        print(f"🧪 Prueba rápida LPI 25: {test_analysis['risk_level']}")
 
         # --- 2. Carga de Bases de Datos ---
         self.load_databases()
@@ -532,11 +472,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         # --- 4. Reset a Valores por Defecto ---
         self.reset_all_to_defaults()
-        print("🚀 Aplicación iniciada con valores puros.")
 
         # --- 5. Inicialización de la Interfaz Gráfica (SIEMPRE AL FINAL) ---
         self.init_ui()
-        print("✅ Interfaz inicializada.")
 
     def init_ui(self):
         """
@@ -1299,7 +1237,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         tools_menu = menu_bar.addMenu("&Herramientas")
         lpi_calc_action = QtWidgets.QAction("Calculadora de LPI…", self)
-        lpi_calc_action.triggered.connect(self.show_lpi_calculator)
+        lpi_calc_action.triggered.connect(self.show_mesh_lpi_dialog)
         tools_menu.addAction(lpi_calc_action)
         troubleshoot_action = QtWidgets.QAction("Solucionador de problemas…", self)
         troubleshoot_action.triggered.connect(self.show_troubleshooter)
@@ -1356,10 +1294,45 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
     # =====================================================================
 
     def show_troubleshooter(self):
+        """Problemas de taller (malla, emulsión, tinta…): causas y soluciones."""
+        import re
+        path = os.path.join(os.path.dirname(__file__), '..', 'data', 'troubleshooting.json')
+        with open(path, encoding='utf-8') as f:
+            categories = json.load(f).get('categorías', [])
+
+        def clean(text):
+            # Quita las marcas de cita del material de origen
+            return re.sub(r'\s*\[cite(?:_start)?[^\]]*\]', '', text).strip()
+
         dialog = QtWidgets.QDialog(self)
-        dialog.setWindowTitle("Solucionador de Problemas de Taller")
-        dialog.setMinimumSize(500, 400)
-        layout = QtWidgets.QVBoxLayout(dialog)
+        dialog.setWindowTitle("Solucionador de problemas de taller")
+        dialog.resize(820, 520)
+        layout = QtWidgets.QHBoxLayout(dialog)
+        tree = QtWidgets.QTreeWidget()
+        tree.setHeaderHidden(True)
+        details = QtWidgets.QTextBrowser()
+        splitter = QtWidgets.QSplitter()
+        splitter.addWidget(tree)
+        splitter.addWidget(details)
+        splitter.setSizes([300, 520])
+        layout.addWidget(splitter)
+        for category in categories:
+            parent = QtWidgets.QTreeWidgetItem(tree, [category.get('nombre', '')])
+            for problem in category.get('problemas', []):
+                item = QtWidgets.QTreeWidgetItem(parent, [problem.get('titulo', '')])
+                item.setData(0, QtCore.Qt.UserRole, problem)
+
+        def show(item, _column=0):
+            problem = item.data(0, QtCore.Qt.UserRole)
+            if not problem:
+                return
+            rows = "".join(f"<li><b>{clean(c.get('descripcion', ''))}</b><br>{clean(c.get('solucion', ''))}</li>"
+                           for c in problem.get('causas', []))
+            details.setHtml(f"<h3>{problem.get('titulo', '')}</h3><p>Causas y soluciones:</p><ol>{rows}</ol>")
+
+        tree.itemClicked.connect(show)
+        tree.expandAll()
+        dialog.exec_()
 
     def update_channel_list_ui(self):
         """Puebla o actualiza los items en la lista de canales."""
@@ -1377,74 +1350,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             if channel in self.channel_colors:
                 button.setStyleSheet(f"background-color: {self.channel_colors[channel].name()};")
 
-    def get_current_channel(self):
-        selected = self.channel_list.selectedItems()
-        if selected:
-            return selected[0].text()
-        return None
 
-    def get_selected_channels_ordered(self):
-        """Obtiene canales seleccionados en orden"""
-        selected_items = self.channel_list.selectedItems()
-        return [item.text() for item in selected_items]
     
-    def get_channel_threshold(self, channel_name):
-        """Obtiene umbral de un canal"""
-        return self.channel_thresholds.get(channel_name, 128)
     
-    def get_channel_color(self, channel_name):
-        """Obtiene color RGB de un canal"""
-        if channel_name in self.channel_colors:
-            color = self.channel_colors[channel_name]
-            return (color.red(), color.green(), color.blue())
-        return (128, 128, 128)  # Gris por defecto
 
 
-    def update_single_color_button(self, channel, color):
-        """
-        Actualiza UN SOLO botón de color.
-        """
-        try:
-            print(f"🎨 Actualizando botón individual para canal {channel}...")
-            
-            # ✅ USANDO TU ESTRUCTURA REAL: self.channel_color_buttons
-            if channel in self.channel_color_buttons:
-                button = self.channel_color_buttons[channel]
-                button.setStyleSheet(f"background-color: {color.name()};")
-                print(f"✅ Botón {channel} actualizado a {color.name()}")
-            else:
-                print(f"❌ Botón para canal {channel} no encontrado")
-                
-        except Exception as e:
-            print(f"❌ Error actualizando botón {channel}: {e}")
 
 
-    def update_channel_list_colors(self):
-        """
-        Actualiza los colores de fondo en tu channel_list.
-        """
-        try:
-            print("🎨 Actualizando colores de la lista de canales...")
-            
-            for i in range(self.channel_list.count()):
-                item = self.channel_list.item(i)
-                if item:
-                    channel = item.text()
-                    if channel in self.channel_colors:
-                        color = self.channel_colors[channel]
-                        self.channel_list.viewport().update()
-                        print(f"✅ Item {channel} actualizado en lista")
-            for i in range(self.channel_list.count()):
-                item = self.channel_list.item(i)
-                if item:
-                    channel = item.text()
-                    if channel in self.channel_colors:
-                        color = self.channel_colors[channel]
-                        self.channel_list.viewport().update()
-                        print(f"✅ Item {channel} actualizado en lista")
-
-        except Exception as e:
-            print(f"❌ Error actualizando lista: {e}")
 
     def show_setup_wizard(self):
         """Muestra un diálogo para guiar al usuario en la configuración del trabajo."""
@@ -1622,8 +1534,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.image_info['file_size_mb'] = os.path.getsize(file_path) / (1024 * 1024)
         self.channel_arrays, self.preview_cache = {}, {}
         self.display_original()
-        self.analyze_image_complexity()
-        self.update_print_format_compatibility()
         self.update_resolution_advice()
         notes = "; ".join(document.notes)
         self.status_bar.showMessage(f"Abierto: {os.path.basename(file_path)}" + (f". {notes}" if notes else ""), 10000)
@@ -1667,38 +1577,20 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.complexity_label.setText(message)
         self.complexity_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
 
-    def calculate_optimal_lpi(self, mesh_count, factor=2.5, equipment_factor=1.0, viewing_distance=1.0):
-            """Algoritmo inteligente de cálculo de LPI"""
-            # Cálculo base
-            base_lpi = mesh_count / factor
-            # Esta función parece incompleta en el original, la dejo como está.
-            return {'base_lpi': base_lpi, 'optimal_lpi': int(base_lpi), 'distance_factor': 1.0}
     
     def load_databases(self):
-        """
-        Carga las bases de datos de insumos desde archivos JSON.
-        NOTA: Se ha eliminado toda la lógica de creación de UI de este método.
-        Su única responsabilidad es cargar datos.
-        """
+        """Carga las bases de datos de tintas y racletas (JSON en src/data)."""
+        data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
         try:
-            current_dir = os.path.dirname(__file__)
-            
-            with open(os.path.join(current_dir, '..', 'data', 'inks.json'), 'r', encoding='utf-8') as f:
+            with open(os.path.join(data_dir, 'inks.json'), encoding='utf-8') as f:
                 self.db_inks = json.load(f)
-            print(f"✅ Base de datos de tintas cargada: {len(self.db_inks)} registros.")
-
-            with open(os.path.join(current_dir, '..', 'data', 'squeegees.json'), 'r', encoding='utf-8') as f:
+            with open(os.path.join(data_dir, 'squeegees.json'), encoding='utf-8') as f:
                 self.db_squeegees = json.load(f)
-            print(f"✅ Base de datos de racletas cargada: {len(self.db_squeegees)} registros.")
-
-            with open(os.path.join(current_dir, '..', 'data', 'troubleshooting.json'), 'r', encoding='utf-8') as f:
-                self.db_troubleshooting = json.load(f)
-            print("✅ Base de datos de problemas cargada.")
-
         except FileNotFoundError as e:
-            QtWidgets.QMessageBox.critical(self, "Error de Carga", f"No se pudo encontrar el archivo de base de datos: {os.path.basename(e.filename)}\nAsegúrate de que la carpeta 'data' exista y contenga los archivos .json.")
+            QtWidgets.QMessageBox.critical(self, "Error de carga", f"No se encontró {os.path.basename(e.filename)} "
+                                           "en la carpeta 'data'.")
         except json.JSONDecodeError as e:
-            QtWidgets.QMessageBox.critical(self, "Error de Carga", f"Error de formato en el archivo JSON: {e}")
+            QtWidgets.QMessageBox.critical(self, "Error de carga", f"Error de formato en un archivo JSON: {e}")
 
     # ------------------------------------------------------------ base
 
@@ -2102,53 +1994,18 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         if lpi <= 0:
             return
         mesh = self.mesh_tpi()
-        analysis = self.moire_detector.analyze_moire_risk(int(round(lpi)), int(round(mesh)), {})
         level, message = mesh_rules.assess(mesh, lpi)
         low, high = mesh_rules.suggested_lpi_range(mesh)
-        self.moire_warning.update_moire_status(lpi, mesh, analysis, level, message,
-                                               f"Recomendado: {low:.0f}–{high:.0f} LPI")
+        self.moire_warning.update_moire_status(level, message, f"Recomendado: {low:.0f}–{high:.0f} LPI")
+
+    def show_mesh_lpi_dialog(self):
+        MeshLpiDialog(self).exec_()
+
+    def set_lpi(self, lpi):
+        self.lpi_combo.setCurrentText(f"{lpi:g} LPI")
 
 
-    def on_resolution_changed(self):
-        """Responder a cambio de configuración de resolución"""
-        resolution_name = self.resolution_combo.currentText()
-        
-        # En el código original, este widget no estaba definido en init_ui
-        # if resolution_name == "Personalizado":
-        #     self.custom_resolution_widget.setVisible(True)
-        # else:
-        #     self.custom_resolution_widget.setVisible(False)
 
-        # Actualizar análisis si hay imagen cargada
-        if hasattr(self, 'image') and self.image is not None:
-            self.analyze_image_complexity()
-
-    def analyze_image_complexity(self):
-        """Analizar complejidad de imagen y dar recomendaciones"""
-        if not hasattr(self, 'image') or self.image is None:
-            return
-
-        try:
-            complexity, recommendation = detect_image_complexity(self.image)
-
-            # Colores según complejidad
-            colors = {
-                "alta": "#FF5722",
-                "media": "#FF9800",
-                "baja": "#4CAF50",
-                "desconocida": "#666"
-            }
-
-            color = colors.get(complexity, "#666")
-
-            complexity_text = f"Detalle {complexity}: {recommendation}"
-            self.complexity_label.setText(complexity_text)
-            self.complexity_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
-
-            print(f"📊 Análisis de imagen: {complexity} - {recommendation}")
-
-        except Exception as e:
-            print(f"⚠️ Error analizando complejidad: {e}")
 
     def setup_dimension_spinbox(self, spinbox, unit):
         """Configurar spinbox según la unidad seleccionada"""
@@ -2166,253 +2023,38 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         return unit_text.split()[0]
 
     def on_unit_changed(self):
-        """Responder a cambio de unidad"""
-        if not hasattr(self, 'custom_width'):
-            return
+        """Convierte ancho y alto a la nueva unidad: la medida del lienzo no cambia."""
+        symbol = self.custom_width.suffix().strip()
+        old_unit = next((k for k, v in MEASUREMENT_UNITS.items() if v['symbol'] == symbol), 'mm')
+        new_unit = self.get_current_unit()
+        for spin in (self.custom_width, self.custom_height):
+            value = convert_units(spin.value(), old_unit, new_unit)
+            self.setup_dimension_spinbox(spin, new_unit)
+            spin.setValue(value)
+        self.update_format_info()
 
-        try:
-            # Obtener valores actuales
-            old_width = self.custom_width.value()
-            old_height = self.custom_height.value()
-
-            # Obtener unidades
-            new_unit = self.get_current_unit()
-            old_unit_symbol = self.custom_width.suffix().strip()
-            # Encontrar la clave de la unidad (ej. 'mm') a partir del símbolo (ej. 'mm')
-            old_unit = next((k for k, v in MEASUREMENT_UNITS.items() if v['symbol'] == old_unit_symbol), old_unit_symbol)
-
-
-            # Convertir valores
-            new_width = convert_units(old_width, old_unit, new_unit)
-            new_height = convert_units(old_height, old_unit, new_unit)
-
-            # Reconfigurar spinboxes
-            self.setup_dimension_spinbox(self.custom_width, new_unit)
-            self.setup_dimension_spinbox(self.custom_height, new_unit)
-
-            # Establecer nuevos valores
-            self.custom_width.setValue(new_width)
-            self.custom_height.setValue(new_height)
-
-            # Actualizar información
-            self.update_custom_format_info()
-
-            print(f"🔄 Unidad cambiada: {old_width}{old_unit_symbol} × {old_height}{old_unit_symbol} → {new_width}{new_unit} × {new_height}{new_unit}")
-
-        except Exception as e:
-            print(f"⚠️ Error cambiando unidad: {e}")
-
-    def update_custom_format_info(self):
-        """Actualizar información del formato personalizado"""
-        try:
-            unit = self.get_current_unit()
-            width = self.custom_width.value()
-            height = self.custom_height.value()
-            dpi = self.custom_dpi.value()
-
-            # Mostrar información formateada
-            dimension_text = format_dimension_display(width, height, unit)
-            self.format_info_label.setText(f"{dimension_text} @ {dpi} DPI")
-            self.update_print_format_compatibility()
-
-        except Exception as e:
-            print(f"⚠️ Error actualizando formato personalizado: {e}")
+    def update_format_info(self):
+        """Medida del lienzo elegido y DPI recomendado."""
+        canvas = self.get_current_print_format()
+        self.format_info_label.setText(f"Lienzo {canvas['width']:g} × {canvas['height']:g} mm · "
+                                       f"{canvas['dpi_recommended']} DPI recomendado")
 
     def get_current_print_format(self):
-        """
-        Obtiene el diccionario de configuración completo para el formato de
-        impresión seleccionado, interpretando correctamente el texto del ComboBox.
-        VERSIÓN CORREGIDA con manejo de errores.
-        """
-        try:
-            format_name_full = self.print_format_combo.currentText()
-            
-            if format_name_full == "Personalizado":
-                # Manejar formato personalizado
-                try:
-                    unit = self.get_current_unit()
-                    width = self.custom_width.value()
-                    height = self.custom_height.value()
-                    dpi = self.custom_dpi.value()
-                    
-                    # Convertir a mm si no está en mm
-                    if unit != "mm":
-                        width_mm = convert_units(width, unit, "mm")
-                        height_mm = convert_units(height, unit, "mm")
-                    else:
-                        width_mm = width
-                        height_mm = height
-                    
-                    return {
-                        'width': width_mm,
-                        'height': height_mm,
-                        'dpi_recommended': dpi,
-                        'name': 'Formato Personalizado'
-                    }
-                except:
-                    # Si falla el formato personalizado, usar A4 por defecto
-                    return {
-                        'width': 210,
-                        'height': 297,
-                        'dpi_recommended': 300,
-                        'name': 'A4 (por defecto)'
-                    }
-
-            # Extrae la clave del formato, por ejemplo "A4" de "A4 (297x420mm)"
-            format_key = format_name_full.split(' ')[0]
-
-            # Verificar si PRINT_FORMATS existe y contiene la clave
-            if hasattr(self, 'PRINT_FORMATS') and format_key in self.PRINT_FORMATS:
-                format_info = self.PRINT_FORMATS[format_key].copy()
-            elif 'PRINT_FORMATS' in globals() and format_key in PRINT_FORMATS:
-                format_info = PRINT_FORMATS[format_key].copy()
-            else:
-                # Si no se encuentra el formato, usar valores por defecto de A4
-                print(f"⚠️ Formato {format_key} no encontrado, usando A4 por defecto")
-                format_info = {
-                    'width': 210,    # mm
-                    'height': 297,   # mm
-                    'dpi_recommended': 300,
-                    'name': f'{format_key} (por defecto)'
-                }
-            
-            # Guarda el nombre completo para mostrarlo en las especificaciones
-            format_info['name'] = format_name_full
-            
-            return format_info
-            
-        except Exception as e:
-            print(f"⚠️ Error en get_current_print_format: {e}")
-            # Retornar formato A4 por defecto en caso de cualquier error
-            return {
-                'width': 210,
-                'height': 297,
-                'dpi_recommended': 300,
-                'name': 'A4 (fallback)'
-            }
+        """Medida (mm) y DPI recomendado del lienzo elegido."""
+        name = self.print_format_combo.currentText()
+        if name == "Personalizado":
+            unit = self.get_current_unit()
+            return {'width': convert_units(self.custom_width.value(), unit, 'mm'),
+                    'height': convert_units(self.custom_height.value(), unit, 'mm'),
+                    'dpi_recommended': self.custom_dpi.value(), 'name': name}
+        return {**PRINT_FORMATS[name], 'name': name}
 
     def get_current_resolution_settings(self):
-        """Obtener configuración actual de resolución"""
-        resolution_name = self.resolution_combo.currentText()
-
-        # En el código original, este widget no estaba definido en init_ui
-        # if resolution_name == "Personalizado":
-        #     return {
-        #         "factor": self.custom_resolution_factor.value(),
-        #         "method": "INTER_CUBIC"
-        #     }
-        # else:
-        return RESOLUTION_ENHANCEMENT[resolution_name]
+        return RESOLUTION_ENHANCEMENT[self.resolution_combo.currentText()]
 
     def on_print_format_changed(self):
-        """Responder a cambio de formato de impresión - VERSIÓN CORREGIDA"""
-        try:
-            format_name = self.print_format_combo.currentText()
-
-            if format_name == "Personalizado":
-                self.custom_size_widget.setVisible(True)
-                self.update_custom_format_info()
-            else:
-                self.custom_size_widget.setVisible(False)
-                print_format = self.get_current_print_format()
-                dpi_rec = print_format.get("dpi_recommended", 300)
-                format_display = print_format.get("name", format_name)
-                self.format_info_label.setText(f"{dpi_rec} DPI recomendado para {format_display}")
-
-            # Actualizar compatibilidad si hay imagen cargada
-            if hasattr(self, 'image_info') and self.image_info:
-                self.update_print_format_compatibility()
-                
-        except Exception as e:
-            print(f"⚠️ Error en cambio de formato: {e}")
-            self.format_info_label.setText("300 DPI recomendado")
-
-    def update_print_format_compatibility(self):
-        """Verificar compatibilidad entre imagen y formato de impresión - VERSIÓN CORREGIDA"""
-        if not hasattr(self, 'image_info') or not self.image_info:
-            # Reset label if no image is loaded
-            if self.print_format_combo.currentText() != "Personalizado":
-                try:
-                    print_format = self.get_current_print_format()
-                    dpi_rec = print_format.get('dpi_recommended', 300)
-                    format_name = print_format.get('name', 'Formato desconocido')
-                    self.format_info_label.setText(f"{dpi_rec} DPI recomendado para {format_name}")
-                    self.format_info_label.setStyleSheet(f"color: {theme.TEXTO_SUAVE}; font-size: 9pt;")
-                except Exception as e:
-                    print(f"⚠️ Error actualizando formato: {e}")
-                    self.format_info_label.setText("300 DPI recomendado")
-            return
-
-        try:
-            print_format = self.get_current_print_format()
-            target_width = print_format["width"] / 10  # mm a cm
-            target_height = print_format["height"] / 10
-            target_dpi = print_format["dpi_recommended"]
-
-            # Comparar con la imagen
-            img_width = self.image_info['width_cm']
-            img_height = self.image_info['height_cm']
-            img_dpi = self.image_info['dpi_x']
-
-            # Calcular si la imagen es adecuada para el formato
-            width_ratio = img_width / target_width if target_width > 0 else 1.0
-            height_ratio = img_height / target_height if target_height > 0 else 1.0
-            dpi_ratio = img_dpi / target_dpi if target_dpi > 0 else 1.0
-
-            # Determinar estado
-            if width_ratio >= 0.9 and height_ratio >= 0.9 and dpi_ratio >= 0.8:
-                status = "✅ Compatible"
-                color = "#4CAF50"
-            elif width_ratio >= 0.7 and height_ratio >= 0.7 and dpi_ratio >= 0.6:
-                status = "⚠️ Aceptable"
-                color = "#FF9800"
-            else:
-                status = "❌ Inadecuado"
-                color = "#F44336"
-
-            format_display_name = print_format.get('name', 'Formato').split('(')[0].strip()
-            compatibility_text = f"{status} para {format_display_name}"
-            self.format_info_label.setText(compatibility_text)
-            self.format_info_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
-
-        except Exception as e:
-            print(f"⚠️ Error calculando compatibilidad: {e}")
-            self.format_info_label.setText("300 DPI recomendado")
-            self.format_info_label.setStyleSheet(f"color: {theme.TEXTO_SUAVE}; font-size: 9pt;")
-
-            try:
-                print_format = self.get_current_print_format()
-                target_width = print_format["width"] / 10  # mm a cm
-                target_height = print_format["height"] / 10
-                target_dpi = print_format["dpi_recommended"]
-
-                # Comparar con la imagen
-                img_width = self.image_info['width_cm']
-                img_height = self.image_info['height_cm']
-                img_dpi = self.image_info['dpi_x']
-
-                # Calcular si la imagen es adecuada para el formato
-                width_ratio = img_width / target_width if target_width > 0 else 1.0
-                height_ratio = img_height / target_height if target_height > 0 else 1.0
-                dpi_ratio = img_dpi / target_dpi if target_dpi > 0 else 1.0
-
-                # Determinar estado
-                if width_ratio >= 0.9 and height_ratio >= 0.9 and dpi_ratio >= 0.8:
-                    status = "✅ Compatible"
-                    color = "#4CAF50"
-                elif width_ratio >= 0.7 and height_ratio >= 0.7 and dpi_ratio >= 0.6:
-                    status = "⚠️ Aceptable"
-                    color = "#FF9800"
-                else:
-                    status = "❌ Inadecuado"
-                    color = "#F44336"
-
-                compatibility_text = f"{status} para {print_format['name'].split('(')[0].strip()}"
-                self.format_info_label.setText(compatibility_text)
-                self.format_info_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
-
-            except Exception as e:
-                print(f"Error calculando compatibilidad: {e}")
+        self.custom_size_widget.setVisible(self.print_format_combo.currentText() == "Personalizado")
+        self.update_format_info()
 
     def display_original(self):
         """Muestra la imagen cargada y actualiza la etiqueta de información."""
@@ -2429,51 +2071,21 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.image_res_label.setText(res_text)
 
     def on_threshold_slider_changed(self, value):
-        """
-        VERSIÓN OPTIMIZADA LIGERA: UI instantánea + procesamiento con delay
-        """
-        try:
-            if not self.current_channel or self.current_channel == "COMPOSITE":
-                return
-                
-            # 1. ACTUALIZACIÓN INSTANTÁNEA de la UI (sin cálculos)
-            self.channel_thresholds[self.current_channel] = value
-            self.threshold_value_label.setText(f"{value} / 255")
-            
-            # 2. CANCELAR timer anterior si existe
-            self.threshold_timer.stop()
-            
-            # 3. PROGRAMAR actualización real con pequeño delay
-            self.threshold_timer.start(100)  # 100ms - ajustable
-        
-        except Exception as e:
-            print(f"❌ Error en slider: {e}")
+        """Actualiza la etiqueta al instante y retrama el canal cuando el slider se detiene."""
+        if not self.current_channel or self.current_channel == "COMPOSITE":
+            return
+        self.channel_thresholds[self.current_channel] = value
+        self.threshold_value_label.setText(f"{value} / 255")
+        self.threshold_timer.start(100)
 
     def _delayed_threshold_update(self):
-        """
-        NUEVA FUNCIÓN: Actualización real cuando el usuario para de mover el slider
-        """
-        try:
-            if not self.current_channel or self.current_channel not in self.channel_arrays:
-                return
-                
-            print(f"🔄 Actualizando umbral para {self.current_channel}")
-            
-            # Regenerar solo el canal actual
-            if hasattr(self, '_regenerate_single_halftone'):
-                self._regenerate_single_halftone(self.current_channel)
-            
-            # Actualizar vista previa
+        if self.current_channel in self.channel_arrays:
+            self._regenerate_single_halftone(self.current_channel)
             self.update_preview()
-            
-            print(f"✅ Umbral actualizado")
-            
-        except Exception as e:
-            print(f"❌ Error en delayed update: {e}")
 
 
     def pick_channel_color(self, channel):
-        """Abre el diálogo de color y actualiza el color del canal."""
+        """Abre el diálogo de color y actualiza el color de simulación del canal."""
         color = QtWidgets.QColorDialog.getColor(self.channel_colors[channel], self)
         if color.isValid():
             self.channel_colors[channel] = color
@@ -2645,66 +2257,18 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.channel_thresholds = self.PURE_DEFAULT_THRESHOLDS.copy()
         self.garment_color = QtGui.QColor("#FFFFFF")
 
-    def get_selected_channel(self):
-        """
-        Obtiene el canal seleccionado usando TU estructura real.
-        """
-        if hasattr(self, 'current_channel') and self.current_channel:
-            return self.current_channel
-        
-        # Si no hay current_channel, buscar en la lista
-        if hasattr(self, 'channel_list'):
-            selected_items = self.channel_list.selectedItems()
-            if selected_items:
-                # Tomar el primer canal seleccionado
-                return selected_items[0].text()
     
-        return None
-    
-    def reset_single_channel_color(self):
-        """
-        Reset de un solo canal - para usar con botones individuales.
-        """
-        channel = self.get_selected_channel()
-        if not channel:
-            QtWidgets.QMessageBox.warning(self, "Sin selección", "Selecciona un canal primero")
-            return
-        
-        self.restore_channel_color_default(channel)
 
     def generate_single_channel_preview(self, channel_name):
-        """
-        VERSIÓN LIGERAMENTE OPTIMIZADA de tu función existente - REEMPLAZA la que tienes
-        """
-        try:
-            if channel_name not in self.preview_cache:
-                print(f"⚠️ No hay datos en caché para el canal {channel_name}")
-                return
-
-            # Tu código existente pero más eficiente
-            halftone_mask = self.preview_cache[channel_name]
-            h, w = halftone_mask.shape
-
-            # Crear canvas más eficientemente
-            garment_rgb = self.garment_color.getRgb()[:3]
-            canvas = np.full((h, w, 3), garment_rgb, dtype=np.uint8)
-
-            # Aplicar color de tinta
-            ink_color_rgb = self.channel_colors[channel_name].getRgb()[:3]
-            dot_locations = halftone_mask == 0
-            canvas[dot_locations] = ink_color_rgb
-            # Se muestra dentro del lienzo: se ve dónde cae el diseño en la película
-            settings = self.job_settings()
-            canvas = np.ascontiguousarray(output.canvas_preview(canvas, settings, self.preview_scale, garment_rgb,
-                                                                plan=self.preview_guide_plan(settings)))
-            h, w = canvas.shape[:2]
-
-            # Convertir a QPixmap de forma optimizada
-            qimage = QtGui.QImage(canvas.data, w, h, w * 3, QtGui.QImage.Format_RGB888)
-            self.preview_label.setPixmap(QtGui.QPixmap.fromImage(qimage))
-
-        except Exception as e:
-            print(f"❌ Error en vista previa de canal único: {e}")
+        """Un solo canal: sus puntos con el color de la tinta sobre la prenda."""
+        if channel_name not in self.preview_cache:
+            return
+        garment_rgb = self.garment_color.getRgb()[:3]
+        halftone_mask = self.preview_cache[channel_name]
+        canvas = np.empty(halftone_mask.shape + (3,), dtype=np.uint8)
+        canvas[:] = garment_rgb
+        canvas[halftone_mask == 0] = self.channel_colors[channel_name].getRgb()[:3]
+        self.show_on_canvas(canvas, self.job_settings(), garment_rgb)
 
     def _regenerate_single_halftone(self, channel_name):
         """Vuelve a tramar un canal de la vista previa tras cambiar su umbral."""
@@ -2715,31 +2279,25 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.channel_arrays[channel_name], channel_name, settings, self.preview_scale)
 
     def update_preview(self):
-        """
-        VERSIÓN OPTIMIZADA de tu función existente - REEMPLAZA la que tienes
-        """
-        # Evitar actualizaciones múltiples simultáneas
-        if hasattr(self, 'is_preview_updating') and self.is_preview_updating:
+        """Vista de un canal o simulación completa, según «Ver solo el canal seleccionado»."""
+        if self.is_preview_updating or not self.preview_cache:
             return
-            
-        if not self.preview_cache:
-            return
-
+        self.is_preview_updating = True
         try:
-            self.is_preview_updating = True
-            
-            # Decidir qué vista mostrar (tu lógica existente)
-            show_individual = self.view_individual_channel_cb.isChecked() and self.current_channel
-
-            if show_individual:
+            if self.view_individual_channel_cb.isChecked() and self.current_channel:
                 self.generate_single_channel_preview(self.current_channel)
             else:
                 self.generate_composite_preview()
-                
-        except Exception as e:
-            print(f"❌ Error en vista previa: {e}")
         finally:
             self.is_preview_updating = False
+
+    def show_on_canvas(self, rgb, settings, garment_rgb):
+        """Muestra la vista previa dentro del lienzo, con las guías donde van a caer."""
+        image = np.ascontiguousarray(output.canvas_preview(rgb, settings, self.preview_scale, garment_rgb,
+                                                           plan=self.preview_guide_plan(settings)))
+        h, w = image.shape[:2]
+        qimage = QtGui.QImage(image.data, w, h, w * 3, QtGui.QImage.Format_RGB888)
+        self.preview_label.setPixmap(QtGui.QPixmap.fromImage(qimage.copy()))
 
     def generate_composite_preview(self):
         """Simulación del impreso o vista de control de calidad, según «Ver»."""
@@ -2761,6 +2319,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         mode = self.view_mode_combo.currentData()
         garment = list(self.garment_color.getRgb()[:3])
         ink_rgb = {ch: self.channel_colors[ch].getRgb()[:3] for ch in order}
+        icc_proof = (mode == 'proof' and settings.icc_profile
+                     and all(ch in self.channel_arrays for ch in 'CMYK'))
+        if icc_proof:
+            # La prueba ICC no usa la simulación: se evita calcularla
+            self.show_on_canvas(icc.cmyk_to_srgb(self.channel_arrays, settings.icc_profile,
+                                                 settings.icc_intent, settings.icc_bpc), settings, garment)
+            return
         printed = sim.simulate(
             self.channel_arrays, self.preview_cache, settings, ink_rgb, garment,
             scale=self.preview_scale, show_screen=self.show_halftones_cb.isChecked(),
@@ -2768,29 +2333,27 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             steps=None if mode != 'print' else steps,
             misregister_mm=self.misregister_spin.value() if mode == 'registration' else 0.0)
         if mode == 'proof':
-            if settings.icc_profile and all(ch in self.channel_arrays for ch in 'CMYK'):
-                image = icc.cmyk_to_srgb(self.channel_arrays, settings.icc_profile,
-                                         settings.icc_intent, settings.icc_bpc)
-            else:
-                image = printed
-                self.status_bar.showMessage("La prueba de color ICC necesita un perfil CMYK en Gestión de color.", 8000)
+            image = printed
+            self.status_bar.showMessage("La prueba de color ICC necesita un perfil CMYK en Gestión de color.", 8000)
         elif mode == 'tac':
             image = sim.tac_overlay(printed, self.channel_arrays, settings)
         elif mode == 'dots':
             image = sim.dot_risk_overlay(printed, self.channel_arrays, settings, self.preview_scale)
         else:
             image = printed
-        image = np.ascontiguousarray(output.canvas_preview(image, settings, self.preview_scale, garment,
-                                                           plan=self.preview_guide_plan(settings)))
-        h, w = image.shape[:2]
-        qimage = QtGui.QImage(image.data, w, h, w * 3, QtGui.QImage.Format_RGB888)
-        self.preview_label.setPixmap(QtGui.QPixmap.fromImage(qimage.copy()))
+        self.show_on_canvas(image, settings, garment)
 
     def preview_guide_plan(self, settings):
         """Dónde caen las guías en espacios en blanco (con todas las tramas de la vista previa)."""
         if not (settings.registration_guides and settings.guides_in_blank and self.preview_cache):
             return None
-        return output.plan_guides(self.preview_cache, settings, self.preview_scale)
+        # Se recalcula solo si cambian las tramas o los ajustes que mueven las guías
+        key = (tuple((name, id(screen)) for name, screen in self.preview_cache.items()), self.preview_scale,
+               settings.dpi, settings.paper_px, settings.guide_cross_mm, settings.control_strip,
+               settings.align, tuple(output.channel_label(ch, settings) for ch in settings.channels()))
+        if self._guide_plan_cache is None or self._guide_plan_cache[0] != key:
+            self._guide_plan_cache = (key, output.plan_guides(self.preview_cache, settings, self.preview_scale))
+        return self._guide_plan_cache[1]
 
     def on_view_mode_changed(self, *_):
         mode = self.view_mode_combo.currentData()
@@ -2854,55 +2417,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         parts.append(f"vista previa al {self.preview_scale:.0%}")
         self.status_bar.showMessage("Separado: " + "; ".join(parts) + ".")
 
-    def on_threshold_changed(self):
-        """
-        Se ejecuta cuando cambia el valor del slider de umbral
-        VERSIÓN MEJORADA CON DEBUG
-        """
-        try:
-            if not hasattr(self, 'threshold_slider') or not hasattr(self, 'current_channel'):
-                return
-                
-            if not self.current_channel or self.current_channel == "COMPOSITE":
-                return
-                
-            # Obtener nuevo valor del slider
-            new_threshold = self.threshold_slider.value()
-            old_threshold = self.channel_thresholds.get(self.current_channel, 128)
-            
-            # Actualizar el valor almacenado para este canal
-            self.channel_thresholds[self.current_channel] = new_threshold
-            
-            # Actualizar etiqueta de valor
-            if hasattr(self, 'threshold_value_label'):
-                self.threshold_value_label.setText(f"{new_threshold} / 255")
-            
-            print(f"🎯 UMBRAL CAMBIÓ: {self.current_channel} [{old_threshold} → {new_threshold}]")
-            
-            # Verificar si hay halftones activos
-            has_halftones = hasattr(self, 'should_show_halftones') and self.should_show_halftones()
-            print(f"   📊 Halftones activos: {has_halftones}")
-            
-            # ACTUALIZAR VISTA PREVIA INMEDIATAMENTE
-            self.update_preview()
-            
-        except Exception as e:
-            print(f"❌ Error en on_threshold_changed: {e}")
-            import traceback
-            traceback.print_exc()
 
 
-    def get_selected_channels(self):
-        """
-        Función auxiliar para obtener canales seleccionados
-        Útil para compatibilidad con código existente
-        """
-        try:
-            selected_items = self.channel_list.selectedItems()
-            return [item.text() for item in selected_items]
-        except Exception as e:
-            print(f"⚠️ Error obteniendo canales seleccionados: {e}")
-            return []
         
     def on_channel_selection_changed(self):
         """
@@ -2933,39 +2449,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             
         self.update_preview()
 
-    def clear_preview(self):
-        """
-        Limpia la vista previa mostrando el color de fondo
-        """
-        try:
-            if hasattr(self, 'preview_label'):
-                # Crear imagen con el color de prenda de fondo
-                pixmap = QtGui.QPixmap(400, 300)
-                pixmap.fill(self.garment_color)
-                
-                # Agregar texto informativo
-                painter = QtGui.QPainter(pixmap)
-                painter.setPen(QtGui.QColor(100, 100, 100))
-                painter.setFont(QtGui.QFont("Arial", 11))
-                painter.drawText(pixmap.rect(), QtCore.Qt.AlignCenter, 
-                            "Selecciona uno o más canales\npara ver la vista previa")
-                painter.end()
-                
-                self.preview_label.setPixmap(pixmap)
-                
-            if hasattr(self, 'status_bar'):
-                self.status_bar.showMessage("Sin canales seleccionados")
-                
-        except Exception as e:
-            print(f"⚠️ Error en clear_preview: {e}")
 
-    def should_show_halftones(self):
-        """
-        Determina si mostrar halftones en vista previa basado en el checkbox
-        """
-        if hasattr(self, 'show_halftones_cb'):
-            return self.show_halftones_cb.isChecked()
-        return True  # Por defecto mostrar halftones si no existe el checkbox
                 
 
     def restore_channel_color_default(self, channel):
@@ -2976,64 +2460,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.update_preview()
 
         
-    def show_mesh_info(self):
-        """Mostrar información técnica de mallas"""
-        info_html = """
-        <h3>📐 Guía Técnica de Mallas Serigráficas</h3>
-        <p>Selecciona la malla adecuada según tu aplicación:</p>
-        """
-
-        for category, details in APPLICATION_CATEGORIES.items():
-            meshes_str = ", ".join([str(m) for m in details['meshes']])
-            info_html += f"""
-            <div style="margin: 15px 0; padding: 12px; border: 2px solid #4CAF50; border-radius: 8px;">
-                <h4 style="color: #2E7D32;">🔸 {category}</h4>
-                <p><b>Mallas:</b> {meshes_str}</p>
-                <p><b>Aplicaciones:</b> {details['description']}</p>
-                <p><b>LPI:</b> {details['lpi_range']} | <b>Depósito:</b> {details['ink_deposit']}</p>
-            </div>
-            """
-
-        info_html += """
-        <h4>💡 Reglas profesionales:</h4>
-        <ul>
-            <li><b>LPI óptimo:</b> Malla ÷ 2 a Malla ÷ 4.75</li>
-            <li><b>Evitar moiré:</b> No usar múltiplos exactos</li>
-            <li><b>Ganancia de punto:</b> Usar plantilla de verificación</li>
-        </ul>
-
-        <h4>🎯 Ángulos de Cuatricromía (aplicados automáticamente):</h4>
-        <div style="background: #f0f8ff; padding: 10px; border-radius: 5px; margin: 10px 0;">
-            <p><b>Cian (C):</b> 15° | <b>Magenta (M):</b> 75°</p>
-            <p><b>Amarillo (Y):</b> 0° | <b>Negro (K):</b> 45°</p>
-            <p><b>⚪ Base Blanca (W):</b> 90° - LPI fijo 45</p>
-            <p><small>✨ Estos ángulos profesionales previenen automáticamente el efecto moiré</small></p>
-        </div>
-
-        <h4>🔍 Mejora de Resolución:</h4>
-        <div style="background: #f8fff8; padding: 10px; border-radius: 5px; margin: 10px 0;">
-            <p><b>📈 Recomendaciones según complejidad:</b></p>
-            <p>• <b>Alta:</b> 200-300% para detalles finos</p>
-            <p>• <b>Media:</b> 150-200% para calidad estándar</p>
-            <p>• <b>Baja:</b> Mantener original puede ser suficiente</p>
-            <p><small>🎯 Mayor resolución = positivos de mejor calidad</small></p>
-        </div>
-
-        <h4>⚪ Base Blanca Automática:</h4>
-        <div style="background: #fffdf0; padding: 10px; border-radius: 5px; margin: 10px 0;">
-            <p><b>📋 Configuración especializada:</b></p>
-            <p>• <b>LPI fijo:</b> 45 (optimizado para cobertura)</p>
-            <p>• <b>Ángulo:</b> 90° (evita interferencia)</p>
-            <p>• <b>Uso:</b> Playeras oscuras y sustratos de color</p>
-            <p><small>⚡ Se genera automáticamente detectando áreas que necesitan base</small></p>
-        </div>
-        """
-
-        msg_box = QtWidgets.QMessageBox(self)
-        msg_box.setWindowTitle("Información Técnica Completa")
-        msg_box.setTextFormat(QtCore.Qt.RichText)
-        msg_box.setText(info_html)
-        msg_box.exec_()
 
     def generate_dot_gain_template(self):
         """
@@ -3127,205 +2553,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         return [films[ch] for ch in settings.channels()]
 
 
-    def find_nearest_non_multiple(self, target_lpi, mesh_count):
-        """Encontrar LPI cercano que no cause moiré"""
-        # Verificar si es múltiplo problemático
-        if mesh_count % target_lpi == 0 or target_lpi % (mesh_count // 10) == 0:
-            # Buscar alternativas cercanas
-            alternatives = []
-            for offset in range(1, 6):
-                for candidate in [target_lpi - offset, target_lpi + offset]:
-                    if candidate > 0 and mesh_count % candidate != 0:
-                        alternatives.append(candidate)
 
-            return min(alternatives) if alternatives else target_lpi
 
-        return target_lpi
 
-    def calculate_lpi_from_mesh(self):
-        """Calcular LPI basado en malla"""
-        try:
-            mesh = self.mesh_input.value()
-            factor = self.calc_factor.value()
 
-            result = self.calculate_optimal_lpi(mesh, factor)
-
-            # Mostrar resultado principal
-            lpi_text = f"""
-            <h4 style="color: #2E7D32;">LPI Calculado: {result['optimal_lpi']}</h4>
-            <p><b>Cálculo base:</b> {mesh} ÷ {factor} = {result['base_lpi']} LPI</p>
-            <p><b>LPI optimizado (anti-moiré):</b> {result['optimal_lpi']} LPI</p>
-            """
-            self.lpi_result_label.setText(lpi_text)
-
-            # Información técnica
-            if mesh in MESH_SPECIFICATIONS:
-                specs = MESH_SPECIFICATIONS[mesh]
-                tech_text = f"""
-                <b>📊 Especificaciones técnicas de malla {mesh}:</b><br>
-                • Apertura: {specs['aperture']} μm<br>
-                • Área abierta: {specs['open_area']}%<br>
-                • Grosor de tinta: {specs['ink_thickness']} μm<br>
-                • Aplicaciones: {', '.join(specs['applications'][:2])}<br>
-                • LPI recomendado por fabricante: {'-'.join(map(str, specs['recommended_lpi']))}
-                """
-            else:
-                # Encontrar malla más cercana
-                closest_mesh = min(MESH_SPECIFICATIONS.keys(), key=lambda x: abs(x - mesh))
-                tech_text = f"""
-                <b>⚠️ Malla {mesh} no está en base de datos</b><br>
-                <b>📊 Referencia más cercana (malla {closest_mesh}):</b><br>
-                Considera usar especificaciones similares para tu cálculo.
-                """
-
-            self.tech_info_label.setText(tech_text)
-
-        except Exception as e:
-            self.lpi_result_label.setText(f"Error en cálculo: {str(e)}")
-
-    def calculate_lpi_from_application(self):
-        """Calcular LPI basado en aplicación"""
-        try:
-            app_name = self.app_selector.currentText()
-            distance = self.viewing_distance.value()
-            equipment_text = self.equipment_quality.currentText()
-
-            # Extraer factor de equipo
-            equipment_factor = float(equipment_text.split('factor ')[1].split(')')[0])
-
-            app_details = APPLICATION_CATEGORIES[app_name]
-            recommended_meshes = app_details['meshes']
-
-            results_text = f"<h4 style='color: #2E7D32;'>Recomendaciones para {app_name}:</h4>"
-
-            for mesh in recommended_meshes:
-                result = self.calculate_optimal_lpi(mesh, 2.5, equipment_factor, distance)
-
-                specs = MESH_SPECIFICATIONS[mesh]
-                results_text += f"""
-                <div style="margin: 8px 0; padding: 8px; border-left: 3px solid #4CAF50; background: #f0f8f0;">
-                    <b>Malla {mesh}:</b> {result['optimal_lpi']} LPI óptimo<br>
-                    <small>Depósito: {specs['ink_thickness']}μm | Aplicaciones: {', '.join(specs['applications'][:2])}</small>
-                </div>
-                """
-
-            results_text += f"""
-            <p style="margin-top: 15px;"><b>💡 Factores aplicados:</b><br>
-            • Distancia de visualización: {distance}m (factor {self.calculate_optimal_lpi(120, 2.5, 1.0, distance)['distance_factor']})<br>
-            • Calidad del equipo: {equipment_text}<br>
-            • Depósito de tinta esperado: {app_details['ink_deposit']}</p>
-            """
-
-            self.app_result_label.setText(results_text)
-
-        except Exception as e:
-            self.app_result_label.setText(f"Error: {str(e)}")
-
-    def check_moire_risk(self):
-        """Verificar riesgo de moiré"""
-        try:
-            mesh = self.moire_mesh.value()
-            lpi = self.moire_lpi.value()
-            if lpi == 0: return # Avoid division by zero
-
-            # Análisis de moiré
-            is_exact_multiple = (mesh % lpi) == 0
-            is_close_multiple = any((mesh % (lpi + i)) == 0 for i in range(-2, 3))
-            is_harmonic = (lpi % (mesh // 10)) == 0 if (mesh // 10) > 0 else False
-
-            risk_level = "BAJO"
-            risk_color = "#4CAF50"
-
-            if is_exact_multiple:
-                risk_level = "CRÍTICO"
-                risk_color = "#F44336"
-            elif is_close_multiple or is_harmonic:
-                risk_level = "ALTO"
-                risk_color = "#FF9800"
-
-            analysis_text = f"""
-            <div style="background: {risk_color}; color: white; padding: 8px; border-radius: 4px; margin-bottom: 10px;">
-                <b>RIESGO DE MOIRÉ: {risk_level}</b>
-            </div>
-
-            <b>📊 Análisis técnico:</b><br>
-            • Malla {mesh} ÷ LPI {lpi} = {mesh/lpi:.2f}<br>
-            • ¿Múltiplo exacto? {'❌ SÍ' if is_exact_multiple else '✅ NO'}<br>
-            • ¿Múltiplo cercano? {'⚠️ SÍ' if is_close_multiple else '✅ NO'}<br>
-            • ¿Armónico problemático? {'⚠️ SÍ' if is_harmonic else '✅ NO'}<br>
-            """
-
-            if risk_level != "BAJO":
-                analysis_text += f"""<br><b style="color: {risk_color};">⚠️ RECOMENDACIÓN:</b> Cambiar LPI para evitar patrones de interferencia."""
-
-            self.moire_result_label.setText(analysis_text)
-
-            # Generar alternativas seguras
-            safe_alternatives = []
-            for candidate in range(max(10, lpi-5), lpi+6):
-                if candidate != lpi and candidate > 0 and mesh % candidate != 0:
-                    safe_alternatives.append(candidate)
-
-            if safe_alternatives:
-                alternatives_text = f"""
-                <b>💡 LPI alternativos seguros:</b><br>
-                {', '.join(map(str, safe_alternatives[:8]))}
-
-                <br><br><b>🎯 Recomendación principal:</b> {safe_alternatives[len(safe_alternatives)//2]} LPI
-                """
-            else:
-                alternatives_text = "No se encontraron alternativas en el rango cercano."
-
-            self.alternatives_label.setText(alternatives_text)
-
-        except Exception as e:
-            self.moire_result_label.setText(f"Error: {str(e)}")
-
-    def export_lpi_calculations(self, dialog):
-        """Exportar cálculos de LPI a archivo"""
-        try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"calculos_lpi_{timestamp}.txt"
-            filepath = os.path.join(self.output_dir, filename)
-
-            with open(filepath, 'w', encoding='utf-8') as f:
-                f.write("CÁLCULOS DE LINEATURA (LPI) PROFESIONAL\n")
-                f.write("=" * 50 + "\n\n")
-                f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-
-                f.write("CÁLCULO POR MALLA:\n")
-                f.write("-" * 20 + "\n")
-                mesh = self.mesh_input.value()
-                factor = self.calc_factor.value()
-                result = self.calculate_optimal_lpi(mesh, factor)
-                f.write(f"Malla: {mesh}\n")
-                f.write(f"Factor: {factor}\n")
-                f.write(f"LPI base: {result['base_lpi']}\n")
-                f.write(f"LPI optimizado: {result['optimal_lpi']}\n\n")
-
-                f.write("VERIFICACIÓN ANTI-MOIRÉ:\n")
-                f.write("-" * 25 + "\n")
-                moire_mesh = self.moire_mesh.value()
-                moire_lpi = self.moire_lpi.value()
-                if moire_lpi > 0:
-                    f.write(f"Malla: {moire_mesh}\n")
-                    f.write(f"LPI: {moire_lpi}\n")
-                    f.write(f"Múltiplo exacto: {'SÍ' if (moire_mesh % moire_lpi) == 0 else 'NO'}\n")
-                    f.write(f"Factor: {moire_mesh/moire_lpi:.2f}\n\n")
-
-                f.write("RECOMENDACIONES GENERALES:\n")
-                f.write("-" * 30 + "\n")
-                f.write("• Usa la fórmula Malla ÷ 2.5 como punto de partida\n")
-                f.write("• Evita múltiplos exactos para prevenir moiré\n")
-                f.write("• Ajusta según distancia de visualización\n")
-                f.write("• Considera la calidad de tu equipo\n")
-                f.write("• Verifica con plantilla de ganancia de punto\n")
-
-            msg = f"✅ Cálculos exportados:\n{filename}\n\nUbicación: {self.output_dir}"
-            QtWidgets.QMessageBox.information(dialog, "Exportación Exitosa", msg)
-
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(dialog, "Error", f"Error al exportar:\n{str(e)}")
 
     def save_results(self):
         """
@@ -3349,7 +2580,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.status_bar.showMessage("Generando positivos a resolución completa…")
             QtWidgets.QApplication.processEvents()
 
-            _, screens, _ = render(self.image, self.image_alpha, settings, preview=False)
+            channels_full, screens, _ = render(self.image, self.image_alpha, settings, preview=False)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             saved_files = []
 
@@ -3373,7 +2604,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 saved_files.append(pdf_name)
 
             if self.cmyk_composite_cb.isChecked() and settings.icc_profile and settings.mode in ('cmyk', 'cmyk_spot'):
-                channels_full, _, _ = render(self.image, self.image_alpha, settings, preview=False)
                 composite_name = f"compuesto_CMYK_{timestamp}.tif"
                 icc.save_cmyk_tiff(os.path.join(folder_path, composite_name), channels_full,
                                    settings.icc_profile, settings.dpi)
@@ -3456,204 +2686,15 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             f.write(f"  Color de prenda: {self.garment_color.name()}\n")
             f.write("\nORDEN DE IMPRESIÓN\n")
             for i, channel in enumerate(settings.channels(), 1):
-                f.write(f"  {i}. {CHANNEL_NAMES.get(channel, channel)}: ángulo "
-                        f"{settings.angles.get(channel, 0):g}°, umbral {settings.thresholds.get(channel, 128)}\n")
+                f.write(f"  {i}. {settings.channel_name(channel)}: ángulo "
+                        f"{settings.channel_angle(channel):g}°, umbral {settings.thresholds.get(channel, 128)}\n")
             f.write("\nARCHIVOS\n")
             for name in saved_files:
                 f.write(f"  {name}\n")
 
-    def reset_channel_color(self):
-        """
-        Reset específico de colores - SINCRONIZADO con valores puros.
-        Reemplaza tu función existente con esta versión.
-        """
-        print("🎨 Restableciendo color de canal a valor PURO...")
-
-        # Obtiene el canal seleccionado
-        if hasattr(self, "selected_channel"):
-            canal = self.selected_channel
-        else:
-            # Busca el canal seleccionado en tu lista (ajusta según tu widget)
-            selected_items = self.channel_list.selectedItems()
-            if not selected_items:
-                QtWidgets.QMessageBox.warning(self, "Sin selección", "Selecciona un canal primero")
-                return
-            # Se asume que el texto del item es solo la letra del canal, ej: "C"
-            canal = selected_items[0].text()
-
-        # --- LÍNEA CORREGIDA ---
-        # Se accede al diccionario a través de 'self'
-        color = self.PURE_CMYK_COLORS.get(canal)
-
-        if color:
-            self.channel_colors[canal] = color
-            
-            # Actualizar botón de color en la UI
-            self.update_single_color_button(canal, color)
-            
-            # Redibuja la vista previa
-            self.update_preview()
-
-            print(f"✅ Color del canal {canal} restablecido a PURO: {color.name()}")
-        else:
-            print(f"❌ Canal {canal} no reconocido")
 
 
-    def select_all_channels(self):
-        self.channel_list.selectAll()
-        self.update_preview()
 
-    def show_lpi_calculator(self):
-        """Calculadora inteligente de lineatura profesional"""
-        try:
-            # Crear diálogo especializado
-            dialog = QtWidgets.QDialog(self)
-            dialog.setWindowTitle("🧮 Calculadora Inteligente de Lineatura (LPI)")
-            dialog.setModal(True)
-            dialog.resize(600, 700)
-
-            layout = QtWidgets.QVBoxLayout(dialog)
-
-            # Información principal
-            info_label = QtWidgets.QLabel("""
-            <h3>🧮 Calculadora Profesional de LPI</h3>
-            <p>Calcula la lineatura óptima basada en especificaciones técnicas reales y
-            evita automáticamente problemas de moiré siguiendo las mejores prácticas.</p>
-            """)
-            info_label.setWordWrap(True)
-            layout.addWidget(info_label)
-
-            # Pestañas para diferentes cálculos
-            tabs = QtWidgets.QTabWidget()
-
-            # === PESTAÑA 1: Cálculo por Malla ===
-            mesh_tab = QtWidgets.QWidget()
-            mesh_layout = QtWidgets.QFormLayout(mesh_tab)
-
-            # Entrada de malla
-            self.mesh_input = QtWidgets.QSpinBox()
-            self.mesh_input.setRange(50, 500)
-            self.mesh_input.setValue(120)
-            self.mesh_input.valueChanged.connect(self.calculate_lpi_from_mesh)
-            mesh_layout.addRow("🕸️ Número de malla:", self.mesh_input)
-
-            # Factor de cálculo
-            self.calc_factor = QtWidgets.QDoubleSpinBox()
-            self.calc_factor.setRange(2.0, 5.0)
-            self.calc_factor.setValue(2.5)
-            self.calc_factor.setSingleStep(0.1)
-            self.calc_factor.valueChanged.connect(self.calculate_lpi_from_mesh)
-            mesh_layout.addRow("⚙️ Factor de cálculo:", self.calc_factor)
-
-            # Resultados
-            self.lpi_result_label = QtWidgets.QLabel()
-            self.lpi_result_label.setStyleSheet("padding: 10px; border: 1px solid #ddd; background: #f9f9f9;")
-            mesh_layout.addRow("📊 Resultado:", self.lpi_result_label)
-
-            # Información técnica
-            self.tech_info_label = QtWidgets.QLabel()
-            self.tech_info_label.setWordWrap(True)
-            self.tech_info_label.setStyleSheet("padding: 10px; border: 1px solid #4CAF50; background: #f8fff8;")
-            mesh_layout.addRow("🔍 Información técnica:", self.tech_info_label)
-
-            tabs.addTab(mesh_tab, "Por Malla")
-
-            # === PESTAÑA 2: Cálculo por Aplicación ===
-            app_tab = QtWidgets.QWidget()
-            app_layout = QtWidgets.QFormLayout(app_tab)
-
-            # Selector de aplicación
-            self.app_selector = QtWidgets.QComboBox()
-            self.app_selector.addItems(list(APPLICATION_CATEGORIES.keys()))
-            self.app_selector.currentTextChanged.connect(self.calculate_lpi_from_application)
-            app_layout.addRow("🎯 Aplicación:", self.app_selector)
-
-            # Distancia de visualización
-            self.viewing_distance = QtWidgets.QDoubleSpinBox()
-            self.viewing_distance.setRange(0.1, 10.0)
-            self.viewing_distance.setValue(1.0)
-            self.viewing_distance.setSuffix(" metros")
-            self.viewing_distance.valueChanged.connect(self.calculate_lpi_from_application)
-            app_layout.addRow("👁️ Distancia de visualización:", self.viewing_distance)
-
-            # Calidad del equipo
-            self.equipment_quality = QtWidgets.QComboBox()
-            self.equipment_quality.addItems([
-                "Básico (factor 0.8)",
-                "Estándar (factor 1.0)",
-                "Profesional (factor 1.2)",
-                "Industrial (factor 1.4)"
-            ])
-            self.equipment_quality.setCurrentIndex(1)
-            self.equipment_quality.currentTextChanged.connect(self.calculate_lpi_from_application)
-            app_layout.addRow("🏭 Calidad del equipo:", self.equipment_quality)
-
-            # Resultados de aplicación
-            self.app_result_label = QtWidgets.QLabel()
-            self.app_result_label.setStyleSheet("padding: 10px; border: 1px solid #ddd; background: #f9f9f9;")
-            app_layout.addRow("📋 Recomendaciones:", self.app_result_label)
-
-            tabs.addTab(app_tab, "Por Aplicación")
-
-            # === PESTAÑA 3: Verificador Anti-Moiré ===
-            moire_tab = QtWidgets.QWidget()
-            moire_layout = QtWidgets.QFormLayout(moire_tab)
-
-            # Entrada para verificación
-            self.moire_mesh = QtWidgets.QSpinBox()
-            self.moire_mesh.setRange(50, 500)
-            self.moire_mesh.setValue(120)
-            self.moire_mesh.valueChanged.connect(self.check_moire_risk)
-            moire_layout.addRow("🕸️ Malla:", self.moire_mesh)
-
-            self.moire_lpi = QtWidgets.QSpinBox()
-            self.moire_lpi.setRange(10, 120)
-            self.moire_lpi.setValue(48)
-            self.moire_lpi.valueChanged.connect(self.check_moire_risk)
-            moire_layout.addRow("📏 LPI a verificar:", self.moire_lpi)
-
-            # Resultado de verificación
-            self.moire_result_label = QtWidgets.QLabel()
-            self.moire_result_label.setWordWrap(True)
-            self.moire_result_label.setStyleSheet("padding: 10px; border: 1px solid #ddd; background: #f9f9f9;")
-            moire_layout.addRow("⚠️ Análisis de moiré:", self.moire_result_label)
-
-            # Alternativas sugeridas
-            self.alternatives_label = QtWidgets.QLabel()
-            self.alternatives_label.setWordWrap(True)
-            self.alternatives_label.setStyleSheet("padding: 10px; border: 1px solid #2196F3; background: #f0f8ff;")
-            moire_layout.addRow("💡 Alternativas seguras:", self.alternatives_label)
-
-            tabs.addTab(moire_tab, "Anti-Moiré")
-
-            layout.addWidget(tabs)
-
-            # Botones de acción
-            button_layout = QtWidgets.QHBoxLayout()
-
-            apply_btn = QtWidgets.QPushButton("✅ Aplicar al Proyecto")
-            apply_btn.clicked.connect(lambda: self.apply_calculated_lpi(dialog))
-            button_layout.addWidget(apply_btn)
-
-            export_btn = QtWidgets.QPushButton("📄 Exportar Cálculos")
-            export_btn.clicked.connect(lambda: self.export_lpi_calculations(dialog))
-            button_layout.addWidget(export_btn)
-
-            close_btn = QtWidgets.QPushButton("Cerrar")
-            close_btn.clicked.connect(dialog.accept)
-            button_layout.addWidget(close_btn)
-
-            layout.addLayout(button_layout)
-
-            # Calcular valores iniciales
-            self.calculate_lpi_from_mesh()
-            self.calculate_lpi_from_application()
-            self.check_moire_risk()
-
-            dialog.exec_()
-
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Error en calculadora LPI:\n{str(e)}")
 
     def process_cmyk(self):
         """
@@ -3674,323 +2715,36 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.show_quality_summary(settings)
             self.update_resolution_advice()
         except Exception as e:
-            print(f"❌ Error durante la separación: {e}")
-            import traceback
-            traceback.print_exc()
             QtWidgets.QMessageBox.critical(self, "No se pudo separar", str(e))
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
     
-    def apply_calculated_lpi(self, dialog):
-        """Aplicar LPI calculado a la configuración actual"""
-        try:
-            # Obtener el LPI calculado
-            lpi_value = self.lpi_result_label.text()
-            if not lpi_value:
-                QtWidgets.QMessageBox.warning(self, "Aviso", "Calcula un LPI primero")
-                return
 
-            # Extraer el valor numérico del LPI
-            lpi_value = int(lpi_value.split()[0])  # Asume formato "LPI: 50"
-
-            # Buscar la opción más cercana en la lista de LPI
-            closest_option = None
-            closest_diff = float('inf')
-
-            for option in self.lpi_combo.findItems("", QtCore.Qt.MatchContains):
-                option_text = option.text()
-                option_value = int(option_text.split()[0])  # Asume formato "LPI: 50"
-                diff = abs(option_value - lpi_value)
-
-                if diff < closest_diff:
-                    closest_diff = diff
-                    closest_option = option_text
-
-            if closest_option:
-                print(f"🎯 Aplicando LPI optimizado: {closest_option}")
-                self.lpi_combo.setCurrentText(closest_option)
-
-                # Mostrar mensaje de éxito
-                if dialog:
-                    msg = f"✅ LPI optimizado aplicado: {closest_option}\n\n" \
-                          "Este valor se ha seleccionado automáticamente para evitar moiré y asegurar una impresión de alta calidad.\n" \
-                          "Asegúrate de revisar las especificaciones de tu impresora antes de imprimir."
-                else:
-                    msg = f"✅ LPI optimizado aplicado: {closest_option}\n\n" \
-                          "Este valor se ha seleccionado automáticamente para evitar moiré y asegurar una impresión de alta calidad.\n" \
-                          "Asegúrate de revisar las especificaciones de tu impresora antes de imprimir.\n\n" \
-                          "Si necesitas ajustar manualmente, puedes hacerlo en la lista desplegable."
-                    msg += "\n\nNota: Si no estás seguro, consulta con tu impresor o proveedor para confirmar que este LPI es adecuado para tu trabajo."
-                    msg += "\n\nRecuerda que un LPI demasiado alto puede causar problemas de registro y calidad si no se maneja correctamente."
-                    msg += "\n\nSi tienes dudas, consulta con un profesional o revisa las guías técnicas disponibles."
-
-                if dialog:
-                    QtWidgets.QMessageBox.information(dialog, "LPI Aplicado", msg)
-                else:
-                    QtWidgets.QMessageBox.information(self, "LPI Aplicado", msg)
-            else:
-                error_msg = "No se encontró un LPI cercano al calculado. Por favor, verifica el valor."
-                print(f"❌ {error_msg}")
-                if dialog:
-                    QtWidgets.QMessageBox.warning(dialog, "Error", error_msg)
-                else:
-                    QtWidgets.QMessageBox.warning(self, "Error", error_msg)
-        except Exception as e:
-            error_msg = f"Error al aplicar LPI: {str(e)}"
-            print(f"❌ {error_msg}")
-            if dialog:
-                QtWidgets.QMessageBox.critical(dialog, "Error", error_msg)
-            else:
-                QtWidgets.QMessageBox.critical(self, "Error", error_msg)
-
-class MoireDetector:
-    """
-    Detector inteligente de patrones de moiré para serigrafía.
-    VERSIÓN COMPLETA con todos los métodos necesarios.
-    """
-    
-    def __init__(self):
-        # UMBRALES MÁS REALISTAS
-        self.risk_levels = {
-            'CRITICO': {'color': '#D32F2F', 'threshold': 0.85},  # Solo casos extremos
-            'ALTO': {'color': '#F57C00', 'threshold': 0.65},     # Casos problemáticos claros
-            'MEDIO': {'color': '#FBC02D', 'threshold': 0.40},    # Algo de riesgo
-            'BAJO': {'color': '#388E3C', 'threshold': 0.0}       # Casos seguros
-        }
-        
-        self.common_meshes = [55, 77, 90, 110, 120, 140, 150, 160, 180, 200, 230, 260, 300, 350, 400]
-        
-    def analyze_moire_risk(self, lpi, mesh_count, channel_angles=None):
-        """
-        Análisis principal de riesgo de moiré - VERSIÓN CORREGIDA
-        """
-        try:
-            # Casos críticos inmediatos
-            if mesh_count % lpi == 0:
-                print(f"🚨 MÚLTIPLO EXACTO: {mesh_count} ÷ {lpi} = {mesh_count/lpi}")
-                return self._create_critical_result()
-            
-            # Análisis de frecuencias
-            frequency_risk = self._analyze_frequency_interference_ultra(lpi, mesh_count)
-            
-            # Análisis de múltiplos
-            multiple_risk = self._analyze_multiples_ultra(lpi, mesh_count)
-            
-            # Análisis de ángulos
-            angle_risk = 0.0
-            if channel_angles:
-                angle_risk = self._analyze_angle_interference(lpi, mesh_count, channel_angles)
-            
-            # Calcular riesgo total (más peso a múltiplos)
-            total_risk = (frequency_risk * 0.4 + multiple_risk * 0.6 + angle_risk * 0.0)
-            
-            # FORZAR MÍNIMO PARA CASOS PROBLEMÁTICOS
-            ratio = mesh_count / lpi
-            if self._is_problematic_ratio(ratio):
-                total_risk = max(total_risk, 0.7)  # Forzar riesgo alto pero no crítico
-                
-            print(f"📊 Risks - Freq: {frequency_risk:.3f}, Mult: {multiple_risk:.3f}, Total: {total_risk:.3f}")
-            
-            # Determinar nivel de riesgo
-            risk_level = self._get_risk_level(total_risk)
-            
-            # Generar recomendaciones
-            recommendations = self._generate_recommendations(lpi, mesh_count, total_risk)
-            
-            return {
-                'risk_level': risk_level,
-                'risk_score': total_risk,
-                'frequency_risk': frequency_risk,
-                'multiple_risk': multiple_risk,
-                'angle_risk': angle_risk,
-                'recommendations': recommendations,
-                'safe_alternatives': self._find_safe_alternatives(lpi, mesh_count)
-            }
-            
-        except Exception as e:
-            print(f"❌ Error en análisis de moiré: {e}")
-            return self._get_default_analysis()
-    
-    def _is_problematic_ratio(self, ratio):
-        """Detecta ratios problemáticos SOLO los realmente críticos"""
-        problematic_ratios = [2.0, 3.0, 4.0, 5.0, 6.0]  # Solo enteros
-        
-        for prob_ratio in problematic_ratios:
-            if abs(ratio - prob_ratio) < 0.15:  # Más tolerante
-                print(f"⚠️ Ratio problemático detectado: {ratio:.3f} cerca de {prob_ratio}")
-                return True
-        return False
-    
-    def _analyze_frequency_interference_ultra(self, lpi, mesh_count):
-        """VERSIÓN MÁS REALISTA de análisis de frecuencias"""
-        if lpi == 0 or mesh_count == 0:
-            return 0.0
-            
-        ratio = mesh_count / lpi
-        print(f"🔢 Analizando ratio: {ratio:.3f}")
-        
-        # Solo ratios realmente críticos
-        critical_ratios = [2.0, 3.0, 4.0, 5.0, 6.0]  # Simplificado
-        
-        min_distance = min(abs(ratio - cr) for cr in critical_ratios)
-        print(f"📏 Distancia mínima a ratio crítico: {min_distance:.3f}")
-        
-        # UMBRALES MÁS REALISTAS
-        if min_distance < 0.05:    # Prácticamente exacto
-            return 0.95
-        elif min_distance < 0.1:   # Muy cerca
-            return 0.8
-        elif min_distance < 0.2:   # Cerca
-            return 0.6
-        elif min_distance < 0.3:   # Moderadamente cerca
-            return 0.4
-        else:
-            return 0.1  # Riesgo mínimo
-    
-    def _analyze_multiples_ultra(self, lpi, mesh_count):
-        """VERSIÓN MÁS REALISTA de análisis de múltiplos"""
-        if lpi == 0:
-            return 0.0
-            
-        # Múltiplo exacto = crítico
-        if mesh_count % lpi == 0:
-            print(f"🚨 MÚLTIPLO EXACTO DETECTADO: {mesh_count} ÷ {lpi} = {mesh_count // lpi}")
-            return 0.95
-        
-        # Analizar cercanía a múltiplos (más tolerante)
-        remainder = mesh_count % lpi
-        close_multiple = min(remainder, lpi - remainder)
-        
-        print(f"📐 Resto de división: {remainder}, Cercanía a múltiplo: {close_multiple}")
-        
-        # MÁS TOLERANTE
-        if close_multiple <= 1:
-            return 0.8
-        elif close_multiple <= 2:
-            return 0.6
-        elif close_multiple <= 3:
-            return 0.4
-        else:
-            return 0.1
-    
-    def _create_critical_result(self):
-        """Resultado crítico inmediato"""
-        return {
-            'risk_level': 'CRITICO',
-            'risk_score': 1.0,
-            'frequency_risk': 1.0,
-            'multiple_risk': 1.0,
-            'angle_risk': 0.0,
-            'recommendations': ["🚨 MÚLTIPLO EXACTO - CAMBIAR LPI INMEDIATAMENTE"],
-            'safe_alternatives': []
-        }
-    
-    def _analyze_angle_interference(self, lpi, mesh_count, channel_angles):
-        """Análisis de interferencia entre ángulos"""
-        return 0.0  # Simplificado por ahora
-    
-    def _get_risk_level(self, risk_score):
-        """Determina el nivel de riesgo - UMBRALES REALISTAS"""
-        if risk_score >= 0.85:      # Solo casos extremos
-            return 'CRITICO'
-        elif risk_score >= 0.65:    # Casos problemáticos claros
-            return 'ALTO'
-        elif risk_score >= 0.40:    # Algo de riesgo
-            return 'MEDIO'
-        else:
-            return 'BAJO'
-    
-    def _generate_recommendations(self, lpi, mesh_count, risk_score):
-        """Genera recomendaciones específicas"""
-        recommendations = []
-        
-        if risk_score >= 0.85:
-            recommendations.append("🚨 CAMBIAR LPI INMEDIATAMENTE")
-            recommendations.append("📏 Usar LPI ±3-5 unidades del actual")
-            
-        if mesh_count % lpi == 0:
-            recommendations.append("⚠️ Múltiplo exacto detectado")
-            
-        if risk_score >= 0.65:
-            recommendations.append("🧪 Hacer prueba antes de producción")
-            recommendations.append("🔍 Verificar con lupa en material final")
-        elif risk_score >= 0.40:
-            recommendations.append("✅ Riesgo moderado - se puede usar con precaución")
-        else:
-            recommendations.append("✅ Configuración segura para impresión")
-            
-        return recommendations
-    
-    def _find_safe_alternatives(self, lpi, mesh_count):
-        """Encuentra LPI alternativos seguros"""
-        safe_alternatives = []
-        
-        for candidate in range(max(15, lpi - 8), lpi + 9):
-            if candidate != lpi:
-                # Análisis rápido
-                if mesh_count % candidate != 0:  # No es múltiplo exacto
-                    ratio = mesh_count / candidate
-                    if not self._is_problematic_ratio(ratio):
-                        safe_alternatives.append({
-                            'lpi': candidate,
-                            'risk_level': 'BAJO',
-                            'risk_score': 0.1
-                        })
-        
-        return safe_alternatives[:5]
-    
-    def _get_default_analysis(self):
-        """Análisis por defecto en caso de error"""
-        return {
-            'risk_level': 'MEDIO',
-            'risk_score': 0.5,
-            'frequency_risk': 0.5,
-            'multiple_risk': 0.5,
-            'angle_risk': 0.0,
-            'recommendations': ["⚠️ No se pudo analizar completamente"],
-            'safe_alternatives': []
-        }
-
-# CLASES PARA EL SISTEMA DE DETECCIÓN DE MOIRÉ MEJORADO
-# Agrega estas clases a tu main_window.py
+# Malla y lineatura: franja de estado y diálogo (reglas de core/mesh.py)
 
 class MoireWarningWidget(QtWidgets.QWidget):
-    """
-    Widget de alerta visual MEJORADO - más grande y funcional
-    """
-    
+    """Franja de estado malla/LPI: barra de color, veredicto, detalle y botón."""
+
+    VERDICTS = {'ok': "Malla y lineatura compatibles",
+                'aviso': "Revisa la lineatura",
+                'riesgo': "Malla muy abierta para esta lineatura"}
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setMinimumHeight(52)
-        self.risk_level = 'BAJO'
-        self.risk_score = 0.0
-        self.current_lpi = 0
-        self.current_mesh = 0
-        self.analysis_result = {}
-        self.parent_window = parent  # Referencia a la ventana principal
-        
-        self.setup_ui()
-        
-    def setup_ui(self):
-        """Franja de estado: barra lateral de color, veredicto, detalle y botón."""
+        self.parent_window = parent
         self.setObjectName("detectorMoire")
         self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(10, 6, 8, 6)
         layout.setSpacing(8)
 
-        # Se conserva para compatibilidad; el estado se comunica con color y texto
-        self.status_icon = QtWidgets.QLabel()
-        self.status_icon.setVisible(False)
-
         info_layout = QtWidgets.QVBoxLayout()
         info_layout.setSpacing(1)
         info_layout.setContentsMargins(0, 0, 0, 0)
-
         self.status_label = QtWidgets.QLabel("Moiré: sin analizar")
         self.status_label.setWordWrap(True)
         info_layout.addWidget(self.status_label)
-
         self.detail_label = QtWidgets.QLabel("")
         self.detail_label.setProperty("rol", "secundario")
         self.detail_label.setWordWrap(True)
@@ -3998,29 +2752,14 @@ class MoireWarningWidget(QtWidgets.QWidget):
         layout.addLayout(info_layout, 1)
 
         self.analyze_btn = QtWidgets.QPushButton("Detalles")
-        self.analyze_btn.setToolTip("Ver el análisis completo y alternativas de LPI")
-        self.analyze_btn.clicked.connect(self.show_detailed_analysis)
+        self.analyze_btn.setToolTip("Hilos por línea, puntos que la malla sostiene y LPI alternativos")
+        self.analyze_btn.clicked.connect(lambda: MeshLpiDialog(self.parent_window).exec_())
         layout.addWidget(self.analyze_btn)
-        
-        # No usar addStretch() para evitar problemas de layout
-        
-    def update_moire_status(self, lpi, mesh, analysis_result, level='ok', message='', recommendation=''):
-        """
-        Muestra la evaluación malla/LPI (hilos por línea y relación entera).
-        El análisis detallado del detector queda en «Detalles».
-        """
-        self.current_lpi = lpi
-        self.current_mesh = mesh
-        self.risk_level = analysis_result['risk_level']
-        self.risk_score = analysis_result['risk_score']
-        self.analysis_result = analysis_result
 
-        verdicts = {'ok': "Malla y lineatura compatibles",
-                    'aviso': "Revisa la lineatura",
-                    'riesgo': "Malla muy abierta para esta lineatura"}
+    def update_moire_status(self, level='ok', message='', recommendation=''):
+        """Muestra la evaluación malla/LPI del motor (mesh.assess)."""
         color = {'ok': theme.ESTADO_OK, 'aviso': theme.ESTADO_ALERTA, 'riesgo': theme.ESTADO_RIESGO}[level]
-
-        self.status_label.setText(verdicts[level])
+        self.status_label.setText(self.VERDICTS[level])
         self.status_label.setStyleSheet(f"color: {color}; font-weight: 600;")
         self.detail_label.setText(f"{message} {recommendation}".strip())
         self.setStyleSheet(f"""
@@ -4032,685 +2771,82 @@ class MoireWarningWidget(QtWidgets.QWidget):
             }}
         """)
         self.analyze_btn.setText("Corregir…" if level == 'riesgo' else "Detalles")
-        
-    def show_detailed_analysis(self):
-        """Mostrar análisis detallado en diálogo mejorado"""
-        if not hasattr(self, 'analysis_result') or not self.analysis_result:
-            QtWidgets.QMessageBox.information(self, "Sin datos", 
-                "No hay análisis de moiré disponible.\n\nCarga una imagen y configura los parámetros LPI primero.")
-            return
-            
-        try:
-            # Crear diálogo pasando la referencia correcta a la ventana principal
-            dialog = MoireAnalysisDialog(
-                self.analysis_result, 
-                self.current_lpi, 
-                self.current_mesh, 
-                self.parent_window  # Pasar la ventana principal
-            )
-            dialog.exec_()
-            
-        except Exception as e:
-            print(f"❌ Error mostrando análisis: {e}")
-            QtWidgets.QMessageBox.critical(self, "Error", 
-                f"Error al mostrar el análisis detallado:\n{str(e)}")
 
 
-# DIÁLOGO DE ANÁLISIS DE MOIRÉ MEJORADO
-
-class MoireAnalysisDialog(QtWidgets.QDialog):
+class MeshLpiDialog(QtWidgets.QDialog):
     """
-    Diálogo MEJORADO con análisis detallado de moiré y recomendaciones.
+    Malla y lineatura con las reglas del motor (core/mesh.py): hilos por
+    línea, rango recomendado, puntos que la malla sostiene y LPI alternativos
+    sin relación entera. Sirve de «Detalles» y de calculadora de LPI.
     """
-    
-    def __init__(self, analysis_result, lpi, mesh, parent=None):
-        super().__init__(parent)
-        self.analysis_result = analysis_result
-        self.lpi = lpi
-        self.mesh = mesh
-        self.parent_window = parent  # Referencia a la ventana principal
-        
-        self.setWindowTitle("🔍 Análisis Detallado de Moiré")
-        self.setMinimumSize(600, 700)
-        self.setMaximumSize(800, 900)
-        self.setup_ui()
-        
-    def setup_ui(self):
-        """Configurar interfaz mejorada del diálogo"""
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.window = window
+        self.setWindowTitle("Malla y lineatura")
+        self.setMinimumWidth(420)
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setSpacing(15)
-        layout.setContentsMargins(20, 20, 20, 20)
-        
-        # === TÍTULO PRINCIPAL ===
-        title_widget = QtWidgets.QWidget()
-        title_widget.setStyleSheet("""
-            QWidget {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                           stop:0 #2196F3, stop:1 #21CBF3);
-                border-radius: 10px;
-                padding: 15px;
-            }
-        """)
-        title_layout = QtWidgets.QVBoxLayout(title_widget)
-        
-        main_title = QtWidgets.QLabel(f"📊 Análisis de Moiré Profesional")
-        main_title.setStyleSheet("font-size: 18px; font-weight: bold; color: white; margin: 0;")
-        main_title.setAlignment(QtCore.Qt.AlignCenter)
-        title_layout.addWidget(main_title)
-        
-        subtitle = QtWidgets.QLabel(f"LPI {self.lpi} vs Malla {self.mesh}")
-        subtitle.setStyleSheet("font-size: 14px; color: white; margin: 0;")
-        subtitle.setAlignment(QtCore.Qt.AlignCenter)
-        title_layout.addWidget(subtitle)
-        
-        layout.addWidget(title_widget)
-        
-        # === SCROLL AREA PARA CONTENIDO ===
-        scroll = QtWidgets.QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        scroll.setStyleSheet("QScrollArea { background: transparent; }")
-        
-        content_widget = QtWidgets.QWidget()
-        content_layout = QtWidgets.QVBoxLayout(content_widget)
-        content_layout.setSpacing(12)
-        
-        # === RESUMEN DE RIESGO MEJORADO ===
-        self.add_improved_risk_summary(content_layout)
-        
-        # === ANÁLISIS TÉCNICO MEJORADO ===
-        self.add_improved_technical_analysis(content_layout)
-        
-        # === RECOMENDACIONES MEJORADAS ===
-        self.add_improved_recommendations(content_layout)
-        
-        # === ALTERNATIVAS SEGURAS MEJORADAS ===
-        self.add_improved_safe_alternatives(content_layout)
-        
-        scroll.setWidget(content_widget)
-        layout.addWidget(scroll)
-        
-        # === BOTONES MEJORADOS ===
-        button_layout = QtWidgets.QHBoxLayout()
-        button_layout.setSpacing(10)
-        
-        # Botón de aplicar - SIEMPRE mostrar si hay alternativas O si es crítico
-        alternatives = self.analysis_result.get('safe_alternatives', [])
-        risk_level = self.analysis_result.get('risk_level', 'BAJO')
-        
-        # Mostrar botón si hay alternativas O si es crítico (para cambiar a algo mejor)
-        show_apply_button = len(alternatives) > 0 or risk_level == 'CRITICO'
-        
-        if show_apply_button:
-            apply_btn = QtWidgets.QPushButton("✅ Aplicar LPI Recomendado")
-            apply_btn.setMinimumHeight(45)
-            apply_btn.setStyleSheet("""
-                QPushButton {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                               stop:0 #4CAF50, stop:1 #45a049);
-                    color: white;
-                    font-weight: bold;
-                    font-size: 12px;
-                    border: none;
-                    border-radius: 8px;
-                    padding: 10px 20px;
-                }
-                QPushButton:hover {
-                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                               stop:0 #5CBF60, stop:1 #4CAF50);
-                }
-                QPushButton:pressed {
-                    background: #45a049;
-                }
-            """)
-            apply_btn.clicked.connect(self.apply_recommended_lpi)
-            button_layout.addWidget(apply_btn)
-        
-        # Botón de cerrar
-        close_btn = QtWidgets.QPushButton("Cerrar")
-        close_btn.setMinimumHeight(45)
-        close_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                           stop:0 #757575, stop:1 #616161);
-                color: white;
-                font-weight: bold;
-                font-size: 12px;
-                border: none;
-                border-radius: 8px;
-                padding: 10px 20px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                           stop:0 #858585, stop:1 #757575);
-            }
-        """)
-        close_btn.clicked.connect(self.accept)
-        button_layout.addWidget(close_btn)
-        
-        layout.addLayout(button_layout)
-        
-    def add_improved_risk_summary(self, layout):
-        """Agregar resumen de riesgo mejorado"""
-        group = QtWidgets.QGroupBox()
-        group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                font-size: 14px;
-                border: 2px solid #ddd;
-                border-radius: 10px;
-                margin-top: 10px;
-                padding-top: 10px;
-                background: white;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 8px 0 8px;
-                background: white;
-            }
-        """)
-        group.setTitle("📈 Resumen de Riesgo")
-        
-        group_layout = QtWidgets.QVBoxLayout(group)
-        group_layout.setSpacing(10)
-        group_layout.setContentsMargins(15, 15, 15, 15)
-        
-        risk_level = self.analysis_result['risk_level']
-        risk_score = self.analysis_result['risk_score']
-        
-        # === INDICADOR VISUAL DE RIESGO ===
-        risk_widget = QtWidgets.QWidget()
-        risk_layout = QtWidgets.QHBoxLayout(risk_widget)
-        risk_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Icono de riesgo
-        risk_icons = {
-            'CRITICO': '🔴', 'ALTO': '🟠', 'MEDIO': '🟡', 'BAJO': '🟢'
-        }
-        risk_icon = QtWidgets.QLabel(risk_icons.get(risk_level, '⚪'))
-        risk_icon.setStyleSheet("font-size: 24px;")
-        risk_layout.addWidget(risk_icon)
-        
-        # Texto de riesgo
-        risk_text = QtWidgets.QLabel(f"Nivel de Riesgo: {risk_level}")
-        risk_text.setStyleSheet("font-size: 16px; font-weight: bold; margin-left: 10px;")
-        risk_layout.addWidget(risk_text)
-        
-        risk_layout.addStretch()
-        
-        # Porcentaje
-        percentage_label = QtWidgets.QLabel(f"{risk_score:.1%}")
-        percentage_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #2196F3;")
-        risk_layout.addWidget(percentage_label)
-        
-        group_layout.addWidget(risk_widget)
-        
-        # === BARRA DE PROGRESO VISUAL ===
-        progress_container = QtWidgets.QWidget()
-        progress_layout = QtWidgets.QVBoxLayout(progress_container)
-        progress_layout.setContentsMargins(0, 5, 0, 5)
-        
-        progress_label = QtWidgets.QLabel("Nivel de Riesgo:")
-        progress_label.setStyleSheet("font-size: 12px; color: #666; margin-bottom: 5px;")
-        progress_layout.addWidget(progress_label)
-        
-        progress = QtWidgets.QProgressBar()
-        progress.setRange(0, 100)
-        progress.setValue(int(risk_score * 100))
-        progress.setMinimumHeight(25)
-        
-        # Colores según riesgo
-        risk_colors = {
-            'CRITICO': '#F44336', 'ALTO': '#FF9800', 'MEDIO': '#FFC107', 'BAJO': '#4CAF50'
-        }
-        color = risk_colors.get(risk_level, '#666')
-        
-        progress.setStyleSheet(f"""
-            QProgressBar {{
-                border: 2px solid #ddd;
-                border-radius: 8px;
-                text-align: center;
-                font-weight: bold;
-                font-size: 11px;
-                background: #f0f0f0;
-            }}
-            QProgressBar::chunk {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                           stop:0 {color}, stop:1 {color}AA);
-                border-radius: 6px;
-            }}
-        """)
-        
-        progress_layout.addWidget(progress)
-        group_layout.addWidget(progress_container)
-        
-        layout.addWidget(group)
-        
-    def add_improved_technical_analysis(self, layout):
-        """Agregar análisis técnico mejorado"""
-        group = QtWidgets.QGroupBox()
-        group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                font-size: 14px;
-                border: 2px solid #ddd;
-                border-radius: 10px;
-                margin-top: 10px;
-                padding-top: 10px;
-                background: white;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 8px 0 8px;
-                background: white;
-            }
-        """)
-        group.setTitle("🔬 Análisis Técnico Detallado")
-        
-        group_layout = QtWidgets.QGridLayout(group)
-        group_layout.setSpacing(12)
-        group_layout.setContentsMargins(15, 15, 15, 15)
-        
-        # === DATOS TÉCNICOS ===
-        technical_data = [
-            ("🔄 Interferencia de frecuencia:", f"{self.analysis_result['frequency_risk']:.1%}"),
-            ("⚠️ Riesgo de múltiplos:", f"{self.analysis_result['multiple_risk']:.1%}"),
-            ("🔀 Interferencia de ángulos:", f"{self.analysis_result['angle_risk']:.1%}"),
-            ("📏 Relación Malla/LPI:", f"{self.mesh / self.lpi if self.lpi > 0 else 0:.2f}"),
-            ("🔢 Resto de división:", f"{self.mesh % self.lpi if self.lpi > 0 else 0}"),
-        ]
-        
-        row = 0
-        for label_text, value_text in technical_data:
-            # Label
-            label = QtWidgets.QLabel(label_text)
-            label.setStyleSheet("font-size: 12px; font-weight: bold; padding: 8px;")
-            group_layout.addWidget(label, row, 0)
-            
-            # Valor en un widget destacado
-            value_widget = QtWidgets.QLabel(value_text)
-            value_widget.setStyleSheet("""
-                QLabel {
-                    background: #f8f9fa;
-                    border: 1px solid #dee2e6;
-                    border-radius: 6px;
-                    padding: 8px 12px;
-                    font-size: 12px;
-                    font-weight: bold;
-                    color: #495057;
-                }
-            """)
-            value_widget.setAlignment(QtCore.Qt.AlignCenter)
-            group_layout.addWidget(value_widget, row, 1)
-            
-            row += 1
-            
-        layout.addWidget(group)
-        
-    def add_improved_recommendations(self, layout):
-        """Agregar recomendaciones mejoradas"""
-        group = QtWidgets.QGroupBox()
-        group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                font-size: 14px;
-                border: 2px solid #ddd;
-                border-radius: 10px;
-                margin-top: 10px;
-                padding-top: 10px;
-                background: white;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 8px 0 8px;
-                background: white;
-            }
-        """)
-        group.setTitle("💡 Recomendaciones Profesionales")
-        
-        group_layout = QtWidgets.QVBoxLayout(group)
-        group_layout.setSpacing(8)
-        group_layout.setContentsMargins(15, 15, 15, 15)
-        
-        for i, recommendation in enumerate(self.analysis_result['recommendations']):
-            rec_widget = QtWidgets.QWidget()
-            rec_layout = QtWidgets.QHBoxLayout(rec_widget)
-            rec_layout.setContentsMargins(0, 0, 0, 0)
-            rec_layout.setSpacing(10)
-            
-            # Número de recomendación
-            number_label = QtWidgets.QLabel(f"{i+1}")
-            number_label.setFixedSize(25, 25)
-            number_label.setStyleSheet("""
-                QLabel {
-                    background: #2196F3;
-                    color: white;
-                    border-radius: 12px;
-                    font-weight: bold;
-                    font-size: 12px;
-                }
-            """)
-            number_label.setAlignment(QtCore.Qt.AlignCenter)
-            rec_layout.addWidget(number_label)
-            
-            # Texto de recomendación
-            rec_label = QtWidgets.QLabel(recommendation)
-            rec_label.setWordWrap(True)
-            rec_label.setStyleSheet("""
-                QLabel {
-                    font-size: 12px;
-                    line-height: 1.4;
-                    padding: 8px 12px;
-                    background: #f8f9fa;
-                    border-left: 4px solid #2196F3;
-                    border-radius: 4px;
-                }
-            """)
-            rec_layout.addWidget(rec_label)
-            
-            group_layout.addWidget(rec_widget)
-            
-        layout.addWidget(group)
-        
-    def add_improved_safe_alternatives(self, layout):
-        """Agregar alternativas seguras mejoradas"""
-        group = QtWidgets.QGroupBox()
-        group.setStyleSheet("""
-            QGroupBox {
-                font-weight: bold;
-                font-size: 14px;
-                border: 2px solid #ddd;
-                border-radius: 10px;
-                margin-top: 10px;
-                padding-top: 10px;
-                background: white;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 8px 0 8px;
-                background: white;
-            }
-        """)
-        group.setTitle("🛡️ LPI Alternativos Seguros")
-        
-        group_layout = QtWidgets.QVBoxLayout(group)
-        group_layout.setSpacing(8)
-        group_layout.setContentsMargins(15, 15, 15, 15)
-        
-        alternatives = self.analysis_result['safe_alternatives']
-        risk_level = self.analysis_result.get('risk_level', 'BAJO')
-        
-        if alternatives:
-            for i, alt in enumerate(alternatives[:4]):  # Top 4
-                alt_widget = QtWidgets.QWidget()
-                alt_widget.setStyleSheet("""
-                    QWidget {
-                        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                                   stop:0 #E8F5E8, stop:1 #F0FFF0);
-                        border: 2px solid #4CAF50;
-                        border-radius: 8px;
-                        padding: 8px;
-                        margin: 2px;
-                    }
-                """)
-                
-                alt_layout = QtWidgets.QHBoxLayout(alt_widget)
-                alt_layout.setContentsMargins(10, 8, 10, 8)
-                
-                # Medalla/ranking
-                rank_label = QtWidgets.QLabel(["🥇", "🥈", "🥉", "🏅"][i])
-                rank_label.setStyleSheet("font-size: 20px;")
-                alt_layout.addWidget(rank_label)
-                
-                # Información del LPI
-                info_layout = QtWidgets.QVBoxLayout()
-                info_layout.setSpacing(2)
-                
-                lpi_label = QtWidgets.QLabel(f"LPI {alt['lpi']}")
-                lpi_label.setStyleSheet("font-weight: bold; font-size: 14px; color: #2E7D32;")
-                info_layout.addWidget(lpi_label)
-                
-                risk_label = QtWidgets.QLabel(f"Riesgo: {alt['risk_level']} ({alt['risk_score']:.1%})")
-                risk_label.setStyleSheet("font-size: 11px; color: #666;")
-                info_layout.addWidget(risk_label)
-                
-                alt_layout.addLayout(info_layout)
-                alt_layout.addStretch()
-                
-                # Badge de recomendado
-                if i == 0:
-                    recommended_badge = QtWidgets.QLabel("⭐ RECOMENDADO")
-                    recommended_badge.setStyleSheet("""
-                        QLabel {
-                            background: #4CAF50;
-                            color: white;
-                            padding: 4px 8px;
-                            border-radius: 12px;
-                            font-size: 10px;
-                            font-weight: bold;
-                        }
-                    """)
-                    alt_layout.addWidget(recommended_badge)
-                
-                group_layout.addWidget(alt_widget)
-                
-        elif risk_level == 'CRITICO':
-            # Para casos críticos sin alternativas automáticas, dar sugerencias manuales
-            critical_widget = QtWidgets.QWidget()
-            critical_widget.setStyleSheet("""
-                QWidget {
-                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
-                               stop:0 #FFF3E0, stop:1 #FFECB3);
-                    border: 2px solid #FF9800;
-                    border-radius: 8px;
-                    padding: 12px;
-                    margin: 2px;
-                }
-            """)
-            
-            critical_layout = QtWidgets.QVBoxLayout(critical_widget)
-            critical_layout.setSpacing(8)
-            
-            warning_title = QtWidgets.QLabel("🚨 CONFIGURACIÓN CRÍTICA DETECTADA")
-            warning_title.setStyleSheet("font-weight: bold; font-size: 13px; color: #E65100;")
-            warning_title.setAlignment(QtCore.Qt.AlignCenter)
-            critical_layout.addWidget(warning_title)
-            
-            current_ratio = self.mesh / self.lpi if self.lpi > 0 else 0
-            
-            suggestion_text = f"""
-<b>📊 Problema actual:</b> LPI {self.lpi} con malla {self.mesh} (ratio: {current_ratio:.1f})<br>
-<b>🔧 Sugerencias manuales:</b><br>
-• <b>LPI 25:</b> Seguro para la mayoría de mallas<br>
-• <b>LPI 30:</b> Buena calidad, compatible<br>
-• <b>LPI 35:</b> Calidad superior, verificar compatibilidad<br><br>
-<b>💡 Regla general:</b> Evita múltiplos exactos (malla ÷ LPI = número entero)
-            """
-            
-            suggestion_label = QtWidgets.QLabel(suggestion_text)
-            suggestion_label.setWordWrap(True)
-            suggestion_label.setStyleSheet("font-size: 11px; line-height: 1.3; color: #333;")
-            critical_layout.addWidget(suggestion_label)
-            
-            group_layout.addWidget(critical_widget)
-            
-        else:
-            no_alt_label = QtWidgets.QLabel("❌ No se encontraron alternativas mejores en el rango analizado.")
-            no_alt_label.setStyleSheet("""
-                QLabel {
-                    font-size: 12px;
-                    color: #666;
-                    background: #fff3cd;
-                    border: 1px solid #ffeeba;
-                    border-radius: 6px;
-                    padding: 12px;
-                }
-            """)
-            no_alt_label.setWordWrap(True)
-            group_layout.addWidget(no_alt_label)
-            
-        layout.addWidget(group)
-        
-    def apply_recommended_lpi(self):
-        """FUNCIÓN COMPLETAMENTE CORREGIDA: Aplicar LPI recomendado"""
-        try:
-            print("🔧 Intentando aplicar LPI recomendado...")
-            
-            # === PASO 1: Determinar LPI objetivo ===
-            alternatives = self.analysis_result.get('safe_alternatives', [])
-            risk_level = self.analysis_result.get('risk_level', 'BAJO')
-            
-            target_lpi = None
-            
-            if alternatives:
-                # Usar la primera alternativa
-                target_lpi = alternatives[0]['lpi']
-                print(f"📋 LPI de alternativas: {target_lpi}")
-            elif risk_level == 'CRITICO':
-                # Para casos críticos, sugerir LPI basado en reglas
-                if self.lpi > 0:
-                    # Intentar LPIs seguros comunes
-                    safe_lpis = [25, 30, 35, 40, 50, 60]
-                    # Buscar el más cercano pero diferente
-                    target_lpi = min(safe_lpis, key=lambda x: abs(x - self.lpi) if x != self.lpi else 999)
-                    print(f"🚨 LPI crítico calculado: {target_lpi}")
-            
-            if not target_lpi:
-                QtWidgets.QMessageBox.warning(self, "⚠️ Sin recomendación", 
-                    "No se pudo determinar un LPI recomendado para esta configuración.")
-                return
-            
-            # === PASO 2: Buscar ventana principal con múltiples métodos ===
-            main_window = None
-            
-            # Método 1: parent_window directo
-            if hasattr(self, 'parent_window') and self.parent_window:
-                main_window = self.parent_window
-                print("✅ Método 1: parent_window encontrado")
-            
-            # Método 2: Buscar por tipo de clase
-            if not main_window:
-                parent = self.parent()
-                while parent:
-                    if hasattr(parent, 'lpi_combo'):
-                        main_window = parent
-                        print("✅ Método 2: Ventana principal encontrada por tipo")
-                        break
-                    parent = parent.parent()
-            
-            # Método 3: Buscar en todas las ventanas abiertas
-            if not main_window:
-                from PyQt5.QtWidgets import QApplication
-                for widget in QApplication.topLevelWidgets():
-                    if hasattr(widget, 'lpi_combo') and hasattr(widget, 'update_moire_analysis'):
-                        main_window = widget
-                        print("✅ Método 3: Ventana principal encontrada globalmente")
-                        break
-            
-            if not main_window:
-                QtWidgets.QMessageBox.critical(self, "❌ Error", 
-                    "No se pudo encontrar la ventana principal de la aplicación.")
-                print("❌ No se encontró ventana principal")
-                return
-            
-            # === PASO 3: Verificar que tiene el combo de LPI ===
-            if not hasattr(main_window, 'lpi_combo'):
-                QtWidgets.QMessageBox.critical(self, "❌ Error", 
-                    "La ventana principal no tiene el control de LPI.")
-                print("❌ No tiene lpi_combo")
-                return
-            
-            combo = main_window.lpi_combo
-            print(f"🎯 Combo encontrado con {combo.count()} opciones")
-            
-            # === PASO 4: Buscar mejor coincidencia ===
-            best_match = None
-            best_match_index = -1
-            min_diff = float('inf')
-            
-            for i in range(combo.count()):
-                item_text = combo.itemText(i)
-                try:
-                    # Extraer número del texto (varios formatos posibles)
-                    # "25 LPI (malla 90)" -> 25
-                    # "30 LPI" -> 30
-                    # "25" -> 25
-                    
-                    parts = item_text.split()
-                    lpi_value = int(parts[0])
-                    
-                    diff = abs(lpi_value - target_lpi)
-                    
-                    if diff < min_diff:
-                        min_diff = diff
-                        best_match = item_text
-                        best_match_index = i
-                        
-                    print(f"   Opción {i}: '{item_text}' -> LPI {lpi_value}, diff: {diff}")
-                        
-                except (ValueError, IndexError) as e:
-                    print(f"   Opción {i}: '{item_text}' -> Error parseando: {e}")
-                    continue
-            
-            if best_match is None:
-                QtWidgets.QMessageBox.warning(self, "⚠️ Aviso", 
-                    f"No se encontró ningún LPI compatible en las opciones disponibles.")
-                print("❌ No se encontró coincidencia")
-                return
-            
-            # === PASO 5: Aplicar el cambio ===
-            print(f"🎯 Aplicando LPI: {best_match} (índice {best_match_index})")
-            
-            old_lpi = combo.currentText()
-            combo.setCurrentIndex(best_match_index)
-            new_lpi = combo.currentText()
-            
-            print(f"🔄 Cambio: '{old_lpi}' -> '{new_lpi}'")
-            
-            # === PASO 6: Forzar actualización ===
-            if hasattr(main_window, 'update_moire_analysis'):
-                main_window.update_moire_analysis()
-                print("🔄 Análisis de moiré actualizado")
-            
-            # Forzar actualización de cualquier preview si existe
-            if hasattr(main_window, 'update_preview'):
-                main_window.update_preview()
-                print("🔄 Vista previa actualizada")
-            
-            # === PASO 7: Mensaje de éxito ===
-            if min_diff == 0:
-                exactitud = "✅ Coincidencia exacta"
-            elif min_diff <= 2:
-                exactitud = f"✅ Coincidencia muy cercana (diferencia: {min_diff})"
-            else:
-                exactitud = f"⚠️ Mejor opción disponible (diferencia: {min_diff})"
-            
-            success_msg = f"""🎉 LPI aplicado exitosamente
 
-🎯 **LPI objetivo:** {target_lpi}
-📊 **LPI aplicado:** {best_match}
-📈 **Exactitud:** {exactitud}
+        form = QtWidgets.QFormLayout()
+        self.mesh_spin = QtWidgets.QDoubleSpinBox()
+        self.mesh_spin.setRange(20, 500)
+        self.mesh_spin.setDecimals(0)
+        self.mesh_spin.setSuffix(" hilos/pulg")
+        self.mesh_spin.setValue(window.mesh_tpi())
+        self.lpi_spin = QtWidgets.QDoubleSpinBox()
+        self.lpi_spin.setRange(5, 150)
+        self.lpi_spin.setDecimals(1)
+        self.lpi_spin.setSuffix(" LPI")
+        self.lpi_spin.setValue(window.current_lpi() or 45)
+        form.addRow("Malla", self.mesh_spin)
+        form.addRow("Lineatura", self.lpi_spin)
+        layout.addLayout(form)
 
-⚡ **Cambios realizados:**
-• Configuración de LPI actualizada
-• Análisis de moiré recalculado
-• Vista previa actualizada (si disponible)
+        self.verdict = QtWidgets.QLabel()
+        self.verdict.setWordWrap(True)
+        layout.addWidget(self.verdict)
+        self.facts = QtWidgets.QLabel()
+        self.facts.setWordWrap(True)
+        self.facts.setProperty("rol", "secundario")
+        layout.addWidget(self.facts)
 
-💡 **Próximo paso:** Procesa tu imagen con esta nueva configuración optimizada."""
-            
-            QtWidgets.QMessageBox.information(self, "🎉 LPI Aplicado", success_msg)
-            self.accept()  # Cerrar diálogo
-            
-            print("✅ Proceso completado exitosamente")
-                
-        except Exception as e:
-            error_msg = f"Error interno al aplicar LPI recomendado:\n\n{str(e)}"
-            print(f"❌ Error: {error_msg}")
-            import traceback
-            traceback.print_exc()
-            QtWidgets.QMessageBox.critical(self, "❌ Error Técnico", 
-                f"Error interno en la aplicación:\n\n{str(e)}\n\nRevisa la consola para más detalles.")
+        layout.addWidget(QtWidgets.QLabel("LPI alternativos (sin relación entera con la malla):"))
+        self.alternatives = QtWidgets.QHBoxLayout()
+        layout.addLayout(self.alternatives)
+
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
+        self.apply_btn = buttons.addButton("Usar esta lineatura", QtWidgets.QDialogButtonBox.AcceptRole)
+        self.apply_btn.clicked.connect(lambda: self.apply(self.lpi_spin.value()))
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.mesh_spin.valueChanged.connect(self.refresh)
+        self.lpi_spin.valueChanged.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self, *_):
+        mesh, lpi = self.mesh_spin.value(), self.lpi_spin.value()
+        level, message = mesh_rules.assess(mesh, lpi)
+        color = {'ok': theme.ESTADO_OK, 'aviso': theme.ESTADO_ALERTA, 'riesgo': theme.ESTADO_RIESGO}[level]
+        self.verdict.setText(f"<b style='color:{color}'>{MoireWarningWidget.VERDICTS[level]}</b><br>{message}")
+        low, high = mesh_rules.suggested_lpi_range(mesh)
+        hold_min, hold_max = sim.holdable_range(mesh, lpi)
+        self.facts.setText(
+            f"{mesh_rules.threads_per_line(mesh, lpi):.2f} hilos por línea "
+            f"(recomendado {mesh_rules.MIN_THREADS_PER_LINE}–{mesh_rules.MAX_THREADS_PER_LINE}).\n"
+            f"Rango para esta malla: {low:.0f}–{high:.0f} LPI; sugerido {mesh_rules.suggested_lpi(mesh)} LPI.\n"
+            f"La malla sostiene puntos de {hold_min:.0f} % a {hold_max:.0f} %; "
+            f"fuera de ese rango se pierden o se tapan.")
+        while self.alternatives.count():
+            item = self.alternatives.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        for value in mesh_rules.alternatives(mesh, lpi):
+            button = QtWidgets.QPushButton(f"{value} LPI")
+            button.clicked.connect(lambda _, v=value: self.apply(v))
+            self.alternatives.addWidget(button)
+        self.alternatives.addStretch(1)
+
+    def apply(self, lpi):
+        self.window.set_lpi(lpi)
+        self.accept()

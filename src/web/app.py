@@ -241,7 +241,7 @@ def preview(doc_id: str = Form(...), settings: str = Form("{}"), view: str = For
 def export(doc_id: str = Form(...), settings: str = Form("{}")):
     document = _document(doc_id)
     job = _settings(settings, document)
-    _, screens, _ = render(document.bgr, document.alpha, job, preview=False)
+    channels_full, screens, _ = render(document.bgr, document.alpha, job, preview=False)
     buffer = io.BytesIO()
     base_name = os.path.splitext(os.path.basename(document.path or "trabajo"))[0] or "trabajo"
     with tempfile.TemporaryDirectory() as folder, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
@@ -261,7 +261,6 @@ def export(doc_id: str = Form(...), settings: str = Form("{}")):
             config["icc_profile_md5"] = info.md5
             config["icc_profile_description"] = info.description
             composite = os.path.join(folder, "compuesto_CMYK.tif")
-            channels_full, _, _ = render(document.bgr, document.alpha, job, preview=False)
             icc.save_cmyk_tiff(composite, channels_full, job.icc_profile, job.dpi)
             bundle.write(composite, "compuesto_CMYK.tif")
         bundle.writestr("configuracion.json", json.dumps(config, indent=2, ensure_ascii=False))

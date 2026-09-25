@@ -57,6 +57,13 @@ class JobSettings:
     # 0 = desconocido: 1 px de imagen = 1 px de salida.
     source_dpi: float = 0.0
     registration_guides: bool = False
+    # margin: se reserva un margen para las guías (el diseño se reduce un poco).
+    # blank: el diseño usa todo el lienzo y las guías van en los espacios en
+    # blanco del diseño (p. ej. los que deja el efecto desgastado).
+    # auto: blank con efecto desgastado, margin sin él.
+    guide_position: str = 'auto'
+    distress_mm: float = 0.0             # efecto desgastado: ancho del borde roto (0 = no)
+    distress_seed: int = 7
     guide_margin_mm: float = REGISTRATION_GUIDE_SETTINGS['margin_mm']
     guide_cross_mm: float = REGISTRATION_GUIDE_SETTINGS['cross_size_mm']
 
@@ -118,8 +125,17 @@ class JobSettings:
         return self.placement == 'fit'
 
     @property
+    def guides_in_blank(self):
+        """Las guías van en los espacios en blanco del diseño (sin margen reservado)."""
+        if self.guide_position == 'auto':
+            return self.distress_mm > 0
+        return self.guide_position == 'blank'
+
+    @property
     def guide_margin_px(self):
-        return round(self.guide_margin_mm / 25.4 * self.dpi) if self.registration_guides else 0
+        if not self.registration_guides or self.guides_in_blank:
+            return 0
+        return round(self.guide_margin_mm / 25.4 * self.dpi)
 
     def ink_channels(self):
         """Canales de tinta de la técnica actual (sin base blanca)."""

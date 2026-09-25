@@ -227,9 +227,11 @@ def preview(doc_id: str = Form(...), settings: str = Form("{}"), view: str = For
     advice = doc_input.resolution_advice(document.bgr.shape, document.dpi, job)
     placed = layout(document.bgr.shape, job)
     design = placed.mm(job.dpi)
-    printed = output.canvas_preview(printed, job, scale, job.garment_rgb)
+    plan = output.plan_guides(screens, job, scale) if job.registration_guides and job.guides_in_blank else None
+    printed = output.canvas_preview(printed, job, scale, job.garment_rgb, plan=plan)
     return {"image": _png_base64(printed), "scale": scale, "design_mm": [round(design[0], 1), round(design[1], 1)],
             "canvas_mm": [job.paper_width_mm, job.paper_height_mm], "reduced": placed.reduced,
+            "guides_missing": plan.missing if plan else [],
             "channels": [{"id": c, "name": job.channel_name(c), "angle": job.channel_angle(c),
                           "rgb": list(_ink_colors(job).get(c, (128, 128, 128)))} for c in job.channels()],
             "report": report, "resolution": {"level": advice[0], "message": advice[1]}}
@@ -244,8 +246,9 @@ def export(doc_id: str = Form(...), settings: str = Form("{}")):
     base_name = os.path.splitext(os.path.basename(document.path or "trabajo"))[0] or "trabajo"
     with tempfile.TemporaryDirectory() as folder, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
         films = []
+        finished, _ = output.finish_positives(screens, job)
         for channel in job.channels():
-            film = output.finish_positive(screens[channel], channel, job)
+            film = finished[channel]
             path = output.save_positive(os.path.join(folder, f"POSITIVO_{channel}"), film, job)
             bundle.write(path, os.path.basename(path))
             films.append(film)

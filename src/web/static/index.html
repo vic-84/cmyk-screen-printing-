@@ -194,7 +194,14 @@
           <input type="number" id="designWidth" class="span2" value="280" min="10" max="2000" step="0.5"></div>
         <div class="row"><label for="align">Posición</label><select id="align" class="span2">
           <option value="center">Centrada</option><option value="top">Arriba al centro</option></select></div>
-        <p class="hint">La película mide el lienzo. Las guías van dentro de su margen y la imagen nunca se corta: si no cabe, se reduce.</p>
+        <div class="row"><label for="distress">Desgaste (mm)</label>
+          <input type="number" id="distress" class="span2" value="0" min="0" max="80" step="1"></div>
+        <div class="row"><label for="guidePos">Guías</label><select id="guidePos" class="span2">
+          <option value="auto">Automático</option><option value="margin">En margen (reduce el diseño)</option>
+          <option value="blank">En espacios en blanco</option></select></div>
+        <div class="row"><label for="guideMargin">Margen (mm)</label>
+          <input type="number" id="guideMargin" class="span2" value="15" min="5" max="50" step="0.5"></div>
+        <p class="hint">La película mide el lienzo y la imagen nunca se corta. Sin desgaste, las guías van en un margen y el diseño se reduce. Con desgaste, las guías van en el borde en blanco que este deja.</p>
         <div class="checks">
           <label><input type="checkbox" id="guides" checked> Guías de registro</label>
           <label><input type="checkbox" id="strip" checked> Tira de control</label>
@@ -258,6 +265,7 @@ function currentSettings() {
     min_dot: +$("minDot").value, max_dot: +$("maxDot").value, dot_gain: +$("gain").value,
     dpi: +$("dpi").value, paper_width_mm: pw, paper_height_mm: ph,
     placement: $("placement").value, design_width_mm: +$("designWidth").value, align: $("align").value,
+    distress_mm: +$("distress").value, guide_position: $("guidePos").value, guide_margin_mm: +$("guideMargin").value,
     registration_guides: $("guides").checked,
     control_strip: $("strip").checked, mirror: $("mirror").checked, negative: $("negative").checked,
     output_format: $("format").value, ink_limit: +$("inkLimit").value, ink_type: $("inkType").value,
@@ -347,6 +355,7 @@ async function runPreview() {
     }
     parts.unshift(`diseño ${r.design_mm[0].toFixed(1)} × ${r.design_mm[1].toFixed(1)} mm en lienzo de ${r.canvas_mm[0]} × ${r.canvas_mm[1]} mm`
                   + (r.reduced ? " (no cabía: se redujo al área útil)" : ""));
+    if (r.guides_missing && r.guides_missing.length) parts.push(`sin espacio en blanco para: ${r.guides_missing.join(", ")} (sube el desgaste o usa guías en margen)`);
     parts.push(`vista previa al ${(r.scale * 100).toFixed(0)} %`);
     setStatus(parts.join("; ") + ". " + r.resolution.message);
   } catch (e) {
@@ -500,7 +509,7 @@ async function init() {
     } catch (e) { setStatus(e.message, true); }
   };
   for (const id of ["shape", "angles", "minDot", "maxDot", "gain", "garment", "inkType", "inkLimit", "whiteBase",
-                    "paper", "placement", "designWidth", "align", "guides", "strip", "mirror", "negative", "trap", "despeckle", "denoise", "sharpen", "smoothEdges", "tolerance", "indexRes", "misreg", "dpi"]) {
+                    "paper", "placement", "designWidth", "align", "distress", "guidePos", "guideMargin", "guides", "strip", "mirror", "negative", "trap", "despeckle", "denoise", "sharpen", "smoothEdges", "tolerance", "indexRes", "misreg", "dpi"]) {
     $(id).addEventListener("change", schedule);
   }
   checkMesh();

@@ -61,8 +61,9 @@ def process_file(path, settings, out_dir, colors=6):
     os.makedirs(folder, exist_ok=True)
 
     films, files = [], []
+    finished, guide_plan = output.finish_positives(screens, job)
     for channel in job.channels():
-        film = output.finish_positive(screens[channel], channel, job)
+        film = finished[channel]
         saved = output.save_positive(os.path.join(folder, f"POSITIVO_{channel}"), film, job)
         films.append(film)
         files.append(os.path.basename(saved))
@@ -78,6 +79,7 @@ def process_file(path, settings, out_dir, colors=6):
         'lienzo_mm': [job.paper_width_mm, job.paper_height_mm],
         'diseno_mm': [round(v, 1) for v in design_size_mm(document.bgr.shape, job)],
         'diseno_reducido_para_caber': layout(document.bgr.shape, job).reduced,
+        'guias_sin_lugar': guide_plan.missing if guide_plan else [],
         'lpi': job.lpi, 'dpi': job.dpi,
         'tinta_total_max': round(report['tac_max'], 1),
         'puntos_que_se_pierden': round(report['lost'], 4),

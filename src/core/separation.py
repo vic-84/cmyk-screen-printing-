@@ -85,6 +85,10 @@ def prepare_image(image, alpha, settings):
         working = cv2.resize(working, target, interpolation=cv2.INTER_AREA if shrink else cv2.INTER_CUBIC)
     if alpha is not None:
         alpha = cv2.resize(alpha, target, interpolation=cv2.INTER_LINEAR)
+    if settings.distress_mm > 0:
+        # En píxeles de salida: el ancho del desgaste es físico (mm en la prenda)
+        alpha = enhance.distress_edges(alpha, working.shape, settings.distress_mm,
+                                       settings.dpi / 25.4, settings.distress_seed)
     working = enhance.sharpen(working, settings.sharpen)
     return working, alpha
 

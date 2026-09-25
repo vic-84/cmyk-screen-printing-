@@ -1007,6 +1007,35 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.show_halftones_cb.setChecked(True)
         self.show_halftones_cb.stateChanged.connect(self.update_preview)
         options_grid.addWidget(self.guides_cb, 0, 0)
+        self.guide_position_combo = compact_combo(QtWidgets.QComboBox())
+        self.guide_position_combo.addItem("Guías: automático", "auto")
+        self.guide_position_combo.addItem("Guías en margen", "margin")
+        self.guide_position_combo.addItem("Guías en espacios en blanco", "blank")
+        self.guide_position_combo.setToolTip(
+            "En margen: el diseño se reduce para dejar el margen de las guías.\n"
+            "En espacios en blanco: el diseño usa todo el lienzo y las cruces, datos y tira se colocan "
+            "donde no hay tinta (por ejemplo, el borde que deja el efecto desgastado).\n"
+            "Automático: en blanco si hay desgaste, en margen si no.")
+        options_grid.addWidget(self.guide_position_combo, 2, 0, 1, 2)
+        self.guide_margin_spin = QtWidgets.QDoubleSpinBox()
+        self.guide_margin_spin.setRange(5, 50)
+        self.guide_margin_spin.setDecimals(1)
+        self.guide_margin_spin.setSuffix(" mm de margen")
+        self.guide_margin_spin.setValue(15)
+        self.guide_margin_spin.setToolTip("Cuánto se reduce el diseño en cada lado para dejar lugar a las guías")
+        options_grid.addWidget(self.guide_margin_spin, 3, 0)
+        self.distress_spin = QtWidgets.QDoubleSpinBox()
+        self.distress_spin.setRange(0, 80)
+        self.distress_spin.setDecimals(0)
+        self.distress_spin.setSuffix(" mm desgaste")
+        self.distress_spin.setSpecialValueText("Sin desgaste")
+        self.distress_spin.setToolTip("Efecto desgastado: rompe el borde del diseño para que no quede cuadrado. "
+                                      "Deja espacio en blanco donde van las guías")
+        options_grid.addWidget(self.distress_spin, 3, 1)
+        for control in (self.guide_position_combo,):
+            control.currentIndexChanged.connect(self.on_output_size_changed)
+        for control in (self.guide_margin_spin, self.distress_spin):
+            control.valueChanged.connect(self.on_output_size_changed)
         options_grid.addWidget(self.white_base_cb, 1, 0)
         options_grid.addWidget(self.show_halftones_cb, 1, 1)
         format_layout.addLayout(options_grid)
@@ -1616,8 +1645,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         placed = layout(self.image.shape, settings)
         width, height = placed.mm(settings.dpi)
         area_w, area_h = placed.area[2] / settings.dpi * 25.4, placed.area[3] / settings.dpi * 25.4
+        in_margin = settings.registration_guides and not settings.guides_in_blank
         text = (f"Lienzo {settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm"
-                + (f" (área útil {area_w:.0f} × {area_h:.0f} mm, guías en el margen)" if settings.registration_guides else "")
+                + (f" (área útil {area_w:.0f} × {area_h:.0f} mm, guías en el margen)" if in_margin else "")
+                + (" (guías en los espacios en blanco del diseño)"
+                   if settings.registration_guides and settings.guides_in_blank else "")
                 + f". Diseño: {width:.1f} × {height:.1f} mm.")
         if placed.reduced:
             text += " No cabía al tamaño pedido: se redujo al área útil para no cortarlo."
@@ -2477,6 +2509,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             align=self.align_combo.currentData(),
             source_dpi=float((self.image_info or {}).get('dpi_x') or 0),
             registration_guides=self.guides_cb.isChecked(),
+            guide_position=self.guide_position_combo.currentData(),
+            guide_margin_mm=self.guide_margin_spin.value(),
+            distress_mm=self.distress_spin.value(),
             denoise=self.denoise_combo.currentData(),
             sharpen=self.sharpen_spin.value(),
             smooth_edges=self.smooth_edges_cb.isChecked(),
@@ -2568,6 +2603,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.design_width_spin.setValue(settings.design_width_mm)
         self.align_combo.setCurrentIndex(max(0, self.align_combo.findData(settings.align)))
         self.guides_cb.setChecked(settings.registration_guides)
+        self.guide_position_combo.setCurrentIndex(max(0, self.guide_position_combo.findData(settings.guide_position)))
+        self.guide_margin_spin.setValue(settings.guide_margin_mm)
+        self.distress_spin.setValue(settings.distress_mm)
         self.white_base_cb.setChecked(settings.white_base)
         self.channel_thresholds.update(settings.thresholds)
         self.set_channel_order(list(settings.channel_order))
@@ -2656,7 +2694,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             dot_locations = halftone_mask == 0
             canvas[dot_locations] = ink_color_rgb
             # Se muestra dentro del lienzo: se ve dónde cae el diseño en la película
-            canvas = np.ascontiguousarray(output.canvas_preview(canvas, self.job_settings(), self.preview_scale, garment_rgb))
+            settings = self.job_settings()
+            canvas = np.ascontiguousarray(output.canvas_preview(canvas, settings, self.preview_scale, garment_rgb,
+                                                                plan=self.preview_guide_plan(settings)))
             h, w = canvas.shape[:2]
 
             # Convertir a QPixmap de forma optimizada
@@ -2740,10 +2780,17 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             image = sim.dot_risk_overlay(printed, self.channel_arrays, settings, self.preview_scale)
         else:
             image = printed
-        image = np.ascontiguousarray(output.canvas_preview(image, settings, self.preview_scale, garment))
+        image = np.ascontiguousarray(output.canvas_preview(image, settings, self.preview_scale, garment,
+                                                           plan=self.preview_guide_plan(settings)))
         h, w = image.shape[:2]
         qimage = QtGui.QImage(image.data, w, h, w * 3, QtGui.QImage.Format_RGB888)
         self.preview_label.setPixmap(QtGui.QPixmap.fromImage(qimage.copy()))
+
+    def preview_guide_plan(self, settings):
+        """Dónde caen las guías en espacios en blanco (con todas las tramas de la vista previa)."""
+        if not (settings.registration_guides and settings.guides_in_blank and self.preview_cache):
+            return None
+        return output.plan_guides(self.preview_cache, settings, self.preview_scale)
 
     def on_view_mode_changed(self, *_):
         mode = self.view_mode_combo.currentData()
@@ -2801,6 +2848,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             width, height = design_size_mm(self.image.shape, settings)
             parts.insert(0, f"diseño {width:.1f} × {height:.1f} mm en lienzo de "
                             f"{settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm")
+        plan = self.preview_guide_plan(settings)
+        if plan and plan.missing:
+            parts.append(f"sin espacio en blanco para: {', '.join(plan.missing)} (sube el desgaste o usa guías en margen)")
         parts.append(f"vista previa al {self.preview_scale:.0%}")
         self.status_bar.showMessage("Separado: " + "; ".join(parts) + ".")
 
@@ -3073,7 +3123,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         """Positivos finales a resolución completa, en orden de impresión."""
         settings = self.job_settings()
         _, screens, _ = render(self.image, self.image_alpha, settings, preview=False)
-        return [output.finish_positive(screens[ch], ch, settings) for ch in settings.channels()]
+        films, _ = output.finish_positives(screens, settings)
+        return [films[ch] for ch in settings.channels()]
 
 
     def find_nearest_non_multiple(self, target_lpi, mesh_count):
@@ -3303,9 +3354,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             saved_files = []
 
             positives, clean_pages = [], []
+            films, guide_plan = output.finish_positives(screens, settings)
             for channel in settings.channels():
                 screen = screens[channel]
-                positive = output.finish_positive(screen, channel, settings)
+                positive = films[channel]
                 path = output.save_positive(os.path.join(folder_path, f"POSITIVO_{channel}_{timestamp}"),
                                             positive, settings)
                 saved_files.append(os.path.basename(path))
@@ -3345,7 +3397,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 self, "Positivos exportados",
                 f"{len(saved_files)} archivos en:\n{folder_path}\n\n"
                 f"Película de {size_mm} a {settings.dpi} DPI, {settings.lpi:g} LPI.\n"
-                f"Diseño impreso: {design_w:.1f} × {design_h:.1f} mm.\n\n"
+                f"Diseño impreso: {design_w:.1f} × {design_h:.1f} mm.\n"
+                + (f"Sin espacio en blanco para: {', '.join(guide_plan.missing)}. Sube el desgaste "
+                   f"o usa guías en margen.\n" if guide_plan and guide_plan.missing else "")
+                + "\n"
                 + "\n".join(saved_files))
 
         except Exception as e:
@@ -3375,7 +3430,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             placement = {'fit': 'ajustada al lienzo', 'real': 'tamaño real',
                          'width': f'ancho fijo {settings.design_width_mm:g} mm'}.get(settings.placement, settings.placement)
             f.write(f"  Imagen: {placement}, {'arriba al centro' if settings.align == 'top' else 'centrada'}\n")
-            f.write(f"  Guías de registro: {'sí' if settings.registration_guides else 'no'}\n")
+            guides = 'no'
+            if settings.registration_guides:
+                guides = ('en los espacios en blanco del diseño' if settings.guides_in_blank
+                          else f'en margen de {settings.guide_margin_mm:g} mm')
+            f.write(f"  Guías de registro: {guides}\n")
+            if settings.distress_mm > 0:
+                f.write(f"  Efecto desgastado: {settings.distress_mm:g} mm de borde\n")
             f.write("\nTRAMA\n")
             f.write(f"  Lineatura: {settings.lpi:g} LPI (celda {settings.cell_px:.2f} px)\n")
             f.write(f"  Forma de punto: {self.shape_combo.currentText()}\n")

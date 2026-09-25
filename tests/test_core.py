@@ -741,6 +741,61 @@ class CoreTests(unittest.TestCase):
         self.assertLessEqual(max(preview.shape[:2]), 1600)
         self.assertTrue((preview[preview.shape[0] // 2, preview.shape[1] // 2] == 0).all())
 
+    # ---------------------------------------------------------------- desgaste y guías en blanco
+
+    def test_distress_breaks_the_edges_and_leaves_them_blank(self):
+        from src.core.enhance import distress_edges
+        dpi = 150
+        alpha = distress_edges(None, (600, 450), 20, dpi / 25.4)
+        edge_px = round(20 / 25.4 * dpi)
+        self.assertEqual(set(np.unique(alpha)), {0, 255})                 # bordes duros
+        self.assertTrue((alpha[edge_px:-edge_px, edge_px:-edge_px] == 255).all())   # el centro intacto
+        self.assertEqual(alpha[:3].max(), 0)                                # el borde exterior limpio
+        band = alpha[edge_px // 2:edge_px, edge_px:-edge_px]
+        self.assertTrue(0.05 < (band == 255).mean() < 0.95)                 # zona desgastada irregular
+        # Misma semilla: mismo desgaste (todos los canales, vista previa y exportación)
+        np.testing.assert_array_equal(alpha, distress_edges(None, (600, 450), 20, dpi / 25.4))
+
+    def test_guides_go_in_the_blank_space_left_by_the_distress(self):
+        image = np.zeros((1104, 736, 3), dtype=np.uint8)                   # todo tinta: el desgaste abre lugar
+        settings = JobSettings(mode="cmyk", placement="fit", registration_guides=True, distress_mm=25,
+                               control_strip=False,
+                               paper_width_mm=260, paper_height_mm=390, dpi=150, source_dpi=72)
+        self.assertTrue(settings.guides_in_blank)                           # automático con desgaste
+        self.assertEqual(settings.guide_margin_px, 0)                       # el diseño no se reduce
+        self.assertAlmostEqual(design_size_mm(image.shape, settings)[1], 390, delta=0.3)
+        _, screens, _ = render(image, None, settings)
+        films, plan = output.finish_positives(screens, settings)
+        self.assertEqual(len(plan.crosses), 4)
+        self.assertIsNotNone(plan.label)
+        self.assertEqual(plan.missing, [])
+        # Las cruces caen en el mismo punto en todas las películas y nunca sobre tinta del diseño
+        x, y = plan.crosses[0]
+        for channel, film in films.items():
+            self.assertEqual(film.shape, settings.paper_px[::-1])
+            self.assertEqual(film[y, x], 0)
+            placed = output.place_on_paper(screens[channel], settings)
+            r = round(settings.guide_cross_mm / 25.4 * settings.dpi / 2)
+            self.assertTrue((placed[max(0, y - r):y + r, max(0, x - r):x + r] == 255).all())
+
+    def test_without_distress_the_design_shrinks_to_leave_the_guide_margin(self):
+        image = np.zeros((400, 300, 3), dtype=np.uint8)
+        settings = JobSettings(placement="fit", registration_guides=True, guide_margin_mm=12,
+                               paper_width_mm=300, paper_height_mm=400)
+        self.assertFalse(settings.guides_in_blank)
+        self.assertAlmostEqual(design_size_mm(image.shape, settings)[0], 300 - 24, delta=0.2)
+
+    def test_full_bleed_design_without_blank_space_reports_missing_guides(self):
+        image = np.zeros((400, 300, 3), dtype=np.uint8)
+        settings = JobSettings(mode="mono", placement="fit", registration_guides=True, guide_position="blank",
+                               paper_width_mm=150, paper_height_mm=200, dpi=150)
+        _, screens, _ = render(image, None, settings)
+        films, plan = output.finish_positives(screens, settings)
+        self.assertEqual(len(plan.crosses), 0)
+        self.assertIn("datos del canal", plan.missing)
+        # No se dibuja nada sobre el diseño
+        np.testing.assert_array_equal(films["K"], output.place_on_paper(screens["K"], settings))
+
     def test_gray_base_is_named_and_simulated_with_its_color(self):
         red = [220, 30, 30]
         spots = [{"id": "S1", "name": "Rojo", "rgb": red, "halftone": False, "opaque": False, "base": True}]

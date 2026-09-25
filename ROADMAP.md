@@ -228,3 +228,19 @@ Algunas marcas exigen separar con su perfil ICC. `src/core/icc.py`, sobre Little
 - **Nunca se corta**: si el tamaño pedido no cabe, se reduce al área útil conservando la proporción y se avisa. Esto se muestra en el panel, en el estado, en la web (`reduced`) y en el CLI (`diseno_reducido_para_caber`).
 - La vista previa (escritorio y web) muestra el lienzo completo con el color de la prenda, el área útil punteada y las cruces.
 - Los trabajos JSON anteriores con `fit_to_paper` se cargan como `placement` `fit` o `real`.
+
+## Guías: margen o espacios en blanco + efecto desgastado
+
+- **Guías en margen** (sin desgaste): el diseño se reduce para dejar el margen de las guías. El margen es ajustable, de 5 a 50 mm por lado.
+- **Efecto desgastado** (`distress_mm`):
+  - rompe el borde del diseño en manchas irregulares hacia adentro;
+  - el 20 % exterior queda limpio y se quitan las islas sueltas de menos de 1.5 mm;
+  - los bordes son duros, sin grises;
+  - usa la misma semilla en todos los canales, en la vista previa y en la exportación.
+- **Guías en espacios en blanco** (automático con desgaste, o forzado):
+  - el diseño usa todo el lienzo;
+  - `plan_guides` busca lugar sin tinta en todas las películas a la vez, así que las cruces caen en el mismo punto en cada una;
+  - 4 cruces con 2 mm de separación de la tinta;
+  - datos del canal y tira de control con 1 mm de separación, en horizontal o en vertical si no caben;
+  - nunca se dibuja sobre el diseño: lo que no tiene lugar se avisa en el estado, en la exportación, en la web (`guides_missing`) y en el CLI (`guias_sin_lugar`).
+- La vista previa muestra dónde caerán las cruces, los datos y la tira.

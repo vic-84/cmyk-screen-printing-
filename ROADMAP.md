@@ -42,13 +42,26 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
 - LPI real correcto, límite de tinta, DPI en la salida, transparencia, base blanca proporcional, interfaz nueva.
 - Pruebas automáticas (11) y hook de sesión que instala las dependencias.
 
-### Fase 1: Motor separado de la interfaz
-`main_window.py` tiene 4 800 líneas con la lógica de separación mezclada con la interfaz. Sin separar el motor no hay versión web, lotes ni pruebas fiables.
-- `src/core/separation.py`: CMYK, base blanca y (después) color plano, sin Qt.
-- `src/core/screening.py`: trama con LPI/DPI, ángulo, forma, rango tonal y curva de ganancia.
-- `src/core/output.py`: PNG/TIFF/PDF, marcas y etiquetas.
-- `JobSettings`: un objeto con toda la configuración de un trabajo, que se guarda y carga en JSON.
-- La interfaz solo lee y escribe `JobSettings` y llama al motor.
+### Fase 1: Motor separado de la interfaz *(hecha)*
+- `src/core/job.py`: `JobSettings`, la configuración completa del trabajo, que se guarda y carga en JSON (menú Archivo → Guardar/Abrir configuración). Cada exportación incluye su `configuracion_*.json`.
+- `src/core/separation.py`: preparación a la resolución de salida, CMYK con GCR y límite de tinta, base blanca y vista previa reducida.
+- `src/core/screening.py`: trama (celda = DPI/LPI), formas de punto y umbral por canal.
+- `src/core/output.py`: colocación en el papel sin reescalar la trama, guías de registro, etiqueta por película (orden, canal, LPI, ángulo, DPI), PNG y PDF con DPI.
+- Se eliminaron de `main_window.py` 21 métodos muertos o duplicados (860 líneas) y `core/halftone.py`.
+- Medido con `prueba.jpg` en A3 a 30 LPI:
+
+  | | Antes | Ahora |
+  |---|---|---|
+  | Separar (vista previa) | ~14 s | **1.4 s** |
+  | Cambiar el umbral de un canal | ~2.5 s | **0.3 s** |
+  | Exportar a resolución completa | — | 13 s |
+
+  La exportación da 29.9–30.1 LPI en los 5 positivos.
+- Corregido al mover la lógica:
+  - Los umbrales por canal no se aplicaban al separar, solo al mover el slider.
+  - El umbral estaba invertido (bajarlo daba *menos* tinta); ahora bajar = más tinta y 128 = sin cambio (antes K arrancaba en 64).
+  - Con guías, sin "Ajustar al formato" y la imagen más grande que el papel, la trama se reescalaba con `INTER_NEAREST`.
+- Pruebas: 16 (5 nuevas del motor).
 
 ### Fase 2: Control de trama profesional
 - **Selector de malla independiente**, en hilos/pulgada o hilos/cm (×2.54), con el LPI sugerido (malla ÷ 3.5–4.75) y aviso de relación entera.

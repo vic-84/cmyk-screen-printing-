@@ -10,7 +10,6 @@ import numpy as np
 import cv2
 from PIL import Image
 from PyQt5 import QtWidgets, QtGui, QtCore
-import math
 import re
 
 # --- Importaciones de módulos locales (ajusta las rutas si es necesario) ---
@@ -31,15 +30,15 @@ import re
 #    - squeegees.json
 #    - troubleshooting.json
 
-from ..core.halftone import apply_simple_halftone, apply_cmyk_halftone, apply_floyd_steinberg_halftone
-from ..core.image_processing import (
-    enhance_image_resolution, generate_white_base, detect_image_complexity,
-    prepare_image_for_processing, resize_to_print_format
-)
+from ..core.image_processing import detect_image_complexity, prepare_image_for_processing
 from ..utils.constants import *
 from ..utils.helpers import convert_units, format_dimension_display
 from .pdf_selector import PDFPageSelector
 from . import theme
+from ..core.job import JobSettings
+from ..core.screening import halftone, screen_channel
+from ..core.separation import needs_paper_fit, render
+from ..core import output
 
 
 # --- Verificación de dependencias ---
@@ -471,6 +470,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.image_info = None
         self.preview_cache = {}
         self.channel_arrays = {}
+        self.preview_scale = 1.0
         self.output_dir = "outputs"
         os.makedirs(self.output_dir, exist_ok=True)
         self.channel_order = ['W', 'Y', 'C', 'M', 'K']
@@ -503,7 +503,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             'W': QtGui.QColor(255, 255, 255)
         }
         self.PURE_DEFAULT_THRESHOLDS = {
-            'C': 128, 'M': 128, 'Y': 128, 'K': 64, 'W': 128
+            'C': 128, 'M': 128, 'Y': 128, 'K': 128, 'W': 128
         }
 
         # --- 4. Reset a Valores por Defecto ---
@@ -801,6 +801,23 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.status_bar.showMessage("Abre una imagen o PDF para empezar")
 
         menu_bar = self.menuBar()
+        file_menu = menu_bar.addMenu("&Archivo")
+        open_action = QtWidgets.QAction("Abrir imagen o PDF…", self)
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self.load_image_or_pdf)
+        file_menu.addAction(open_action)
+        file_menu.addSeparator()
+        load_job_action = QtWidgets.QAction("Abrir configuración…", self)
+        load_job_action.triggered.connect(self.load_job_settings)
+        file_menu.addAction(load_job_action)
+        save_job_action = QtWidgets.QAction("Guardar configuración…", self)
+        save_job_action.triggered.connect(self.save_job_settings)
+        file_menu.addAction(save_job_action)
+        file_menu.addSeparator()
+        export_action = QtWidgets.QAction("Exportar positivos…", self)
+        export_action.triggered.connect(self.save_results)
+        file_menu.addAction(export_action)
+
         tools_menu = menu_bar.addMenu("&Herramientas")
         lpi_calc_action = QtWidgets.QAction("Calculadora de LPI…", self)
         lpi_calc_action.triggered.connect(self.show_lpi_calculator)
@@ -819,15 +836,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.lpi_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.shape_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.update_moire_analysis()
-
-    def get_current_resolution_settings(self):
-        """
-        Este método ahora funcionará porque self.resolution_combo existe.
-        """
-        if hasattr(self, 'resolution_combo'):
-            return RESOLUTION_ENHANCEMENT.get(self.resolution_combo.currentText(), {"factor": 1.0, "method": "INTER_CUBIC"})
-        return {"factor": 1.0, "method": "INTER_CUBIC"} # Valor por defecto seguro
-
 
     # =====================================================================
     # == MÉTODOS DE LÓGICA Y EVENTOS
@@ -1678,174 +1686,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             except Exception as e:
                 print(f"Error calculando compatibilidad: {e}")
 
-    def add_registration_guides(self, img, channel_name, dpi=300):
-        """
-        VERSIÓN CORREGIDA: Agrega guías de registro profesionales.
-        """
-        if not self.guides_cb.isChecked():
-            print(f"   ❌ Guías desactivadas - retornando imagen original")
-            return img
-            
-        try:
-            print(f"   🎯 === AGREGANDO GUÍAS DE REGISTRO A {channel_name} ===")
-            
-            # Obtener configuración actual
-            print_format = self.get_current_print_format()
-            
-            # Configuración de guías (en píxeles)
-            margin_px = int((REGISTRATION_GUIDE_SETTINGS["margin_mm"] / 25.4) * dpi)
-            cross_size_px = int((REGISTRATION_GUIDE_SETTINGS["cross_size_mm"] / 25.4) * dpi)
-            line_thickness = REGISTRATION_GUIDE_SETTINGS["line_thickness"]
-            
-            print(f"   📏 DPI: {dpi}, Margen: {margin_px}px, Cruz: {cross_size_px}px")
-            
-            # Dimensiones de la imagen original
-            orig_h, orig_w = img.shape[:2]
-            print(f"   📐 Imagen original: {orig_w}x{orig_h}")
-            
-            # Calcular dimensiones del papel (formato de impresión)
-            paper_width_mm = print_format["width"]
-            paper_height_mm = print_format["height"]
-            paper_width_px = int((paper_width_mm / 25.4) * dpi)
-            paper_height_px = int((paper_height_mm / 25.4) * dpi)
-            
-            print(f"   📄 Papel: {paper_width_mm}x{paper_height_mm}mm = {paper_width_px}x{paper_height_px}px")
-            
-            # Crear canvas expandido (papel + márgenes para guías)
-            final_width = paper_width_px + (margin_px * 2)
-            final_height = paper_height_px + (margin_px * 2)
-            
-            print(f"   🖼️ Canvas final: {final_width}x{final_height}")
-            
-            # Crear canvas blanco
-            final_canvas = np.ones((final_height, final_width), dtype=np.uint8) * 255
-            
-            # PASO 1: Centrar la imagen original en el área del papel
-            if self.fit_format_cb.isChecked():
-                # Escalar para ajustar al formato manteniendo proporción
-                scale_x = paper_width_px / orig_w
-                scale_y = paper_height_px / orig_h
-                scale = min(scale_x, scale_y)  # Usar el menor para que quepa
-                
-                new_w = int(orig_w * scale)
-                new_h = int(orig_h * scale)
-                
-                # Redimensionar usando INTER_NEAREST para preservar halftones
-                img_resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
-                print(f"   🔄 Imagen redimensionada: {new_w}x{new_h} (escala: {scale:.3f})")
-            else:
-                # Usar imagen original si cabe
-                if orig_w <= paper_width_px and orig_h <= paper_height_px:
-                    img_resized = img
-                    new_w, new_h = orig_w, orig_h
-                    print(f"   ✅ Usando tamaño original: {new_w}x{new_h}")
-                else:
-                    # Si no cabe, escalar para que quepa
-                    scale_x = paper_width_px / orig_w
-                    scale_y = paper_height_px / orig_h
-                    scale = min(scale_x, scale_y)
-                    
-                    new_w = int(orig_w * scale)
-                    new_h = int(orig_h * scale)
-                    img_resized = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
-                    print(f"   🔄 Imagen forzada a caber: {new_w}x{new_h}")
-            
-            # Centrar imagen en el área del papel
-            paper_start_x = margin_px
-            paper_start_y = margin_px
-            
-            img_start_x = paper_start_x + (paper_width_px - new_w) // 2
-            img_start_y = paper_start_y + (paper_height_px - new_h) // 2
-            
-            # Colocar imagen en el canvas
-            final_canvas[img_start_y:img_start_y+new_h, img_start_x:img_start_x+new_w] = img_resized
-            
-            print(f"   📍 Imagen colocada en: ({img_start_x}, {img_start_y})")
-            
-            # PASO 2: Agregar guías de registro
-            guide_color = 0  # Negro para las guías
-            
-            # Cruces en las esquinas del papel
-            corners = [
-                (margin_px, margin_px),                                    # Superior izquierda
-                (margin_px + paper_width_px, margin_px),                   # Superior derecha  
-                (margin_px, margin_px + paper_height_px),                  # Inferior izquierda
-                (margin_px + paper_width_px, margin_px + paper_height_px)  # Inferior derecha
-            ]
-            
-            for cx, cy in corners:
-                # Cruz horizontal
-                cv2.line(final_canvas, 
-                        (cx - cross_size_px//2, cy), 
-                        (cx + cross_size_px//2, cy), 
-                        guide_color, line_thickness)
-                # Cruz vertical
-                cv2.line(final_canvas, 
-                        (cx, cy - cross_size_px//2), 
-                        (cx, cy + cross_size_px//2), 
-                        guide_color, line_thickness)
-                # Círculo exterior
-                cv2.circle(final_canvas, (cx, cy), cross_size_px//2 + 2, guide_color, 1)
-            
-            # Marcas centrales en los bordes
-            center_x = margin_px + paper_width_px // 2
-            center_y = margin_px + paper_height_px // 2
-            
-            # Marca central superior
-            cv2.line(final_canvas, 
-                    (center_x - cross_size_px//3, margin_px - cross_size_px//3), 
-                    (center_x + cross_size_px//3, margin_px - cross_size_px//3), 
-                    guide_color, line_thickness)
-            
-            # Marca central inferior  
-            cv2.line(final_canvas, 
-                    (center_x - cross_size_px//3, margin_px + paper_height_px + cross_size_px//3), 
-                    (center_x + cross_size_px//3, margin_px + paper_height_px + cross_size_px//3), 
-                    guide_color, line_thickness)
-            
-            # Marca central izquierda
-            cv2.line(final_canvas, 
-                    (margin_px - cross_size_px//3, center_y - cross_size_px//3), 
-                    (margin_px - cross_size_px//3, center_y + cross_size_px//3), 
-                    guide_color, line_thickness)
-            
-            # Marca central derecha
-            cv2.line(final_canvas, 
-                    (margin_px + paper_width_px + cross_size_px//3, center_y - cross_size_px//3), 
-                    (margin_px + paper_width_px + cross_size_px//3, center_y + cross_size_px//3), 
-                    guide_color, line_thickness)
-            
-            # PASO 3: Agregar información del canal (opcional)
-            if REGISTRATION_GUIDE_SETTINGS["text_info"]:
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.6
-                text_thickness = 1
-                
-                # Información del canal en la esquina superior izquierda
-                text = f"CANAL {channel_name}"
-                text_size = cv2.getTextSize(text, font, font_scale, text_thickness)[0]
-                text_x = 10
-                text_y = text_size[1] + 10
-                
-                cv2.putText(final_canvas, text, (text_x, text_y), font, font_scale, guide_color, text_thickness)
-                
-                # Información técnica en la esquina inferior
-                tech_info = f"LPI: {self.lpi_combo.currentText()} | DPI: {dpi}"
-                tech_y = final_height - 10
-                cv2.putText(final_canvas, tech_info, (text_x, tech_y), font, 0.4, guide_color, 1)
-            
-            print(f"   ✅ Guías de registro agregadas exitosamente")
-            print(f"   📊 Canvas final: {final_canvas.shape}, valores: {final_canvas.min()}-{final_canvas.max()}")
-            
-            return final_canvas
-            
-        except Exception as e:
-            print(f"   ❌ ERROR agregando guías: {e}")
-            import traceback
-            traceback.print_exc()
-            return img  # Retornar imagen original si falla
-   
-
     def display_original(self):
         """Muestra la imagen cargada y actualiza la etiqueta de información."""
         if self.image is not None and self.image_info:
@@ -1860,70 +1700,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             res_text = f"{info['width_px']}×{info['height_px']}px, {info['dpi_x']:.0f} DPI, {info['width_cm']:.1f}×{info['height_cm']:.1f}cm"
             self.image_res_label.setText(res_text)
 
-    def show_channel(self, channel):
-        print(f"DEBUG: Mostrando canal {channel}")
-        """
-        Muestra el canal seleccionado en la vista previa.
-        Genera un QPixmap para el canal y lo muestra en el label de previsualización.
-        """
-        if channel not in self.preview_cache:
-            self.status_bar.showMessage(f"❌ Canal {channel} no disponible")
-            return
-
-        pixmap = self.generate_channel_pixmap(channel)
-        if pixmap is None:
-            self.status_bar.showMessage(f"❌ No se pudo generar vista previa para el canal {channel}")
-            return
-        
-        # Sincroniza slider con el umbral de ese canal
-        threshold = self.channel_thresholds.get(channel, 64)
-        self.threshold_slider.blockSignals(True)
-        self.threshold_slider.setValue(threshold)
-        self.threshold_slider.blockSignals(False)
-
-        self.preview_label.setPixmap(pixmap)
-        self.status_bar.showMessage(f"Mostrando canal: {channel}")
-
-    def generate_channel_pixmap(self, channel):
-        """
-        ACTUALIZADO: Genera un pixmap del canal individual APLICANDO EL HALFTONE.
-        """
-        if channel not in self.channel_arrays:
-            return QtGui.QPixmap()
-
-        gray_channel_np = self.channel_arrays[channel]
-        threshold = self.channel_thresholds.get(channel, 128)
-        _, thresholded_channel = cv2.threshold(gray_channel_np, threshold, 255, cv2.THRESH_BINARY)
-
-        scale, shape, angles = self._get_halftone_params()
-        
-        halftoned_mask = self.generate_quick_halftone(
-            thresholded_channel, 
-            angles.get(channel, 0), 
-            scale
-        )
-
-        # Verificar que los datos son correctos
-        unique_vals = len(np.unique(halftoned_mask))
-        print(f"📊 Halftone {channel}: valores únicos = {unique_vals}, rango = {halftoned_mask.min()}-{halftoned_mask.max()}")
-
-        if unique_vals > 1:
-            print(f"✅ Halftone con ángulo {angles.get(channel, 0)}° aplicado al canal {channel}")
-        else:
-            print(f"⚠️ Halftone {channel} sin variación, revisa parámetros")
-
-        h, w = halftoned_mask.shape
-        rgba_data = np.zeros((h, w, 4), dtype=np.uint8)
-        target_color = self.channel_colors[channel]
-        r, g, b = target_color.red(), target_color.green(), target_color.blue()
-        
-        # Pinta los puntos (donde la máscara es negra) con el color de la tinta
-        ink_mask = halftoned_mask == 0
-        rgba_data[ink_mask] = [r, g, b, 255]
-        
-        q_image = QtGui.QImage(rgba_data.data, w, h, 4 * w, QtGui.QImage.Format_ARGB32)
-        return QtGui.QPixmap.fromImage(q_image)
-    
     def on_threshold_slider_changed(self, value):
         """
         VERSIÓN OPTIMIZADA LIGERA: UI instantánea + procesamiento con delay
@@ -1977,23 +1753,72 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.update_channel_list_ui()
             self.update_preview()
 
-    def _get_halftone_params(self):
-        """
-        Método auxiliar para obtener los parámetros de halftone actuales desde la UI.
-        """
-        # La celda se mide en píxeles del archivo de salida: celda = DPI / LPI.
-        # Se deja en float; truncarla a int desviaba el LPI real (45 LPI salía a 50).
+    def job_settings(self):
+        """Lee la interfaz y devuelve la configuración del trabajo para el motor."""
+        print_format = self.get_current_print_format()
+        resolution = self.get_current_resolution_settings()
         try:
-            lpi = int(self.lpi_combo.currentText().split()[0])
-            dpi = self.get_current_print_format()["dpi_recommended"]
-            scale = max(2.0, dpi / lpi)
-        except (ValueError, IndexError, KeyError, ZeroDivisionError):
-            scale = 6.0 # Valor por defecto si falla la lectura
+            lpi = float(self.lpi_combo.currentText().split()[0])
+        except (ValueError, IndexError):
+            lpi = 45.0
+        return JobSettings(
+            lpi=lpi,
+            dot_shape=POINT_SHAPES.get(self.shape_combo.currentText(), 'circle'),
+            angles=dict(CMYK_ANGLES),
+            dpi=int(print_format["dpi_recommended"]),
+            paper_width_mm=float(print_format["width"]),
+            paper_height_mm=float(print_format["height"]),
+            fit_to_paper=self.fit_format_cb.isChecked(),
+            registration_guides=self.guides_cb.isChecked(),
+            resolution_factor=resolution.get("factor", 1.0),
+            resolution_method=resolution.get("method"),
+            white_base=self.white_base_cb.isChecked(),
+            thresholds=dict(self.channel_thresholds),
+            channel_order=list(self.channel_order),
+        )
 
-        shape = POINT_SHAPES[self.shape_combo.currentText()]
-        angles = dict(CMYK_ANGLES)
+    def apply_job_settings(self, settings):
+        """Refleja en la interfaz una configuración cargada de archivo."""
+        lpi_items = [self.lpi_combo.itemText(i) for i in range(self.lpi_combo.count())]
+        closest = min(lpi_items, key=lambda t: abs(float(t.split()[0]) - settings.lpi), default=None)
+        if closest:
+            self.lpi_combo.setCurrentText(closest)
+        for label, shape in POINT_SHAPES.items():
+            if shape == settings.dot_shape:
+                self.shape_combo.setCurrentText(label)
+        self.fit_format_cb.setChecked(settings.fit_to_paper)
+        self.guides_cb.setChecked(settings.registration_guides)
+        self.white_base_cb.setChecked(settings.white_base)
+        self.channel_thresholds.update(settings.thresholds)
+        self.set_channel_order(list(settings.channel_order))
+        self.print_format_combo.setCurrentText("Personalizado")
+        self.custom_width.setValue(convert_units(settings.paper_width_mm, "mm", self.get_current_unit()))
+        self.custom_height.setValue(convert_units(settings.paper_height_mm, "mm", self.get_current_unit()))
+        self.custom_dpi.setValue(settings.dpi)
 
-        return scale, shape, angles
+    def save_job_settings(self):
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self, "Guardar configuración", self.output_dir, "Configuración (*.json)")
+        if path:
+            self.job_settings().save(path)
+            self.status_bar.showMessage(f"Configuración guardada: {os.path.basename(path)}", 5000)
+
+    def load_job_settings(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Abrir configuración", self.output_dir, "Configuración (*.json)")
+        if not path:
+            return
+        try:
+            self.apply_job_settings(JobSettings.load(path))
+            self.status_bar.showMessage(f"Configuración cargada: {os.path.basename(path)}", 5000)
+        except (OSError, ValueError, TypeError) as e:
+            QtWidgets.QMessageBox.critical(self, "No se pudo abrir la configuración",
+                                           f"El archivo no es una configuración válida.\n\n{e}")
+
+    def _get_halftone_params(self):
+        """Celda, forma y ángulos actuales (en píxeles del positivo)."""
+        settings = self.job_settings()
+        return settings.cell_px, settings.dot_shape, dict(settings.angles)
     
     def reset_all_to_defaults(self):
         """Resetea las variables de la aplicación a sus valores iniciales."""
@@ -2028,138 +1853,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         
         self.restore_channel_color_default(channel)
 
-    def generate_halftone_pattern(self, channel_data, threshold, channel_name):
-        """
-        Halftones equilibrados para simulación natural
-        """
-        try:
-            print(f"🎯 Generando halftone equilibrado para {channel_name}")
-            
-            # Normalizar datos del canal
-            normalized_data = channel_data.astype(np.float32) / 255.0
-            threshold_norm = threshold / 255.0
-            
-            # Crear patrón de puntos equilibrado
-            height, width = channel_data.shape
-            dot_size = self.get_halftone_dot_size(channel_name)
-            angle = self.get_halftone_angle(channel_name)
-            
-            # Crear grilla de coordenadas con rotación
-            y, x = np.mgrid[0:height, 0:width]
-            
-            # Aplicar rotación
-            angle_rad = np.radians(angle)
-            x_rot = x * np.cos(angle_rad) - y * np.sin(angle_rad)
-            y_rot = x * np.sin(angle_rad) + y * np.cos(angle_rad)
-            
-            # Crear patrón de puntos usando coordenadas rotadas
-            pattern_x = (x_rot % dot_size) - dot_size/2
-            pattern_y = (y_rot % dot_size) - dot_size/2
-            
-            # Distancia al centro del punto
-            distance = np.sqrt(pattern_x**2 + pattern_y**2)
-            
-            # Normalizar el patrón de forma equilibrada
-            max_distance = dot_size / 2
-            pattern = np.clip(distance / max_distance, 0.0, 1.0)
-            
-            # Aplicar función de transferencia para puntos más naturales
-            pattern = np.power(pattern, 0.8)  # Menos agresivo que 0.7
-            
-            # Aplicar umbral de intensidad equilibrado
-            intensity_adjusted = np.clip(
-                (normalized_data - threshold_norm) * 2.5 + 0.2,  # Menos agresivo que 3.0
-                0.0, 1.0
-            )
-            
-            # Combinar patrón con intensidad
-            halftone_mask = (pattern < intensity_adjusted).astype(np.float32)
-            
-            # Suavizado muy sutil
-            try:
-                from scipy import ndimage
-                halftone_mask = ndimage.gaussian_filter(halftone_mask, sigma=0.3)  # Menos suavizado
-            except ImportError:
-                pass
-            
-            print(f"✅ Halftone equilibrado para {channel_name} - densidad: {np.mean(halftone_mask):.3f}")
-            return halftone_mask
-            
-        except Exception as e:
-            print(f"⚠️ Error en halftone equilibrado: {e}")
-            # Fallback mejorado
-            normalized_data = channel_data.astype(np.float32) / 255.0
-            threshold_norm = threshold / 255.0
-            return np.clip((normalized_data - threshold_norm) * 1.8 + 0.4, 0.0, 1.0)
-
-    def get_halftone_angle(self, channel_name):
-        """
-        Ángulos estándar para evitar interferencias (moiré)
-        """
-        return CMYK_ANGLES.get(channel_name, CMYK_ANGLES['C'])
-
-    def create_dot_pattern(self, width, height, dot_size, angle):
-        """
-        Crea patrón de puntos para halftone
-        """
-        # Crear grilla de coordenadas
-        x = np.arange(width)
-        y = np.arange(height)
-        X, Y = np.meshgrid(x, y)
-        
-        # Aplicar rotación
-        angle_rad = np.radians(angle)
-        X_rot = X * np.cos(angle_rad) - Y * np.sin(angle_rad)
-        Y_rot = X * np.sin(angle_rad) + Y * np.cos(angle_rad)
-        
-        # Crear patrón de puntos circulares
-        grid_x = (X_rot % dot_size) - dot_size/2
-        grid_y = (Y_rot % dot_size) - dot_size/2
-        
-        # Distancia al centro del punto
-        distance = np.sqrt(grid_x**2 + grid_y**2)
-        
-        # Normalizar (0.0 = centro del punto, 1.0 = borde)
-        pattern = distance / (dot_size/2)
-        pattern = np.clip(pattern, 0.0, 1.0)
-        
-        return pattern
-
-    def apply_halftone_absorption(self, canvas, halftone_mask, channel_name):
-        """
-        Aplica absorción CMYK pura con patrón de halftone
-        """
-        if channel_name == 'W':
-            # Blanco: aplicar sobre áreas con tinta
-            white_areas = halftone_mask > 0.1
-            canvas[white_areas, 0] = 1.0
-            canvas[white_areas, 1] = 1.0
-            canvas[white_areas, 2] = 1.0
-            
-        elif channel_name == 'C':
-            # CIAN PURO: absorbe SOLO rojo con halftone
-            canvas[:, :, 0] *= (1.0 - halftone_mask * 0.70)
-            # Verde y azul quedan intactos
-            
-        elif channel_name == 'M':
-            # MAGENTA PURO: absorbe SOLO verde con halftone
-            canvas[:, :, 1] *= (1.0 - halftone_mask * 0.70)
-            # Rojo y azul quedan intactos
-            
-        elif channel_name == 'Y':
-            # AMARILLO PURO: absorbe SOLO azul con halftone
-            canvas[:, :, 2] *= (1.0 - halftone_mask * 0.75)
-            # Rojo y verde quedan intactos
-            
-        elif channel_name == 'K':
-            # Negro: absorbe todos los canales por igual con halftone
-            absorption = halftone_mask * 0.82
-            canvas[:, :, 0] *= (1.0 - absorption)
-            canvas[:, :, 1] *= (1.0 - absorption)
-            canvas[:, :, 2] *= (1.0 - absorption)
-        
-        return canvas
-    
     def generate_single_channel_preview(self, channel_name):
         """
         VERSIÓN LIGERAMENTE OPTIMIZADA de tu función existente - REEMPLAZA la que tienes
@@ -2189,104 +1882,14 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"❌ Error en vista previa de canal único: {e}")
 
-    def _generate_halftone_pattern(self, image_data, scale, shape, angle):
-        """
-        Genera un patrón de semitonos con una forma y ángulo específicos.
-        Este método interno reemplaza la llamada a la función externa.
-        """
-        # Crear una grilla de coordenadas
-        # float32: a tamaño de impresión (A3 @ 300 dpi ≈ 17 Mpx) float64 duplica la RAM
-        h, w = image_data.shape
-        x_coords, y_coords = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
-
-        # Rotar las coordenadas según el ángulo
-        angle_rad = np.radians(angle)
-        cos_a, sin_a = np.float32(np.cos(angle_rad)), np.float32(np.sin(angle_rad))
-        x_rot = x_coords * cos_a + y_coords * sin_a
-        y_rot = -x_coords * sin_a + y_coords * cos_a
-        del x_coords, y_coords
-
-        # Normalizar la imagen de entrada (0.0 a 1.0)
-        image_norm = image_data.astype(np.float32) / 255.0
-
-        # Posición dentro de la celda, centrada en el punto (-scale/2 .. scale/2)
-        dx = (x_rot % scale) - scale / 2
-        dy = (y_rot % scale) - scale / 2
-
-        # Patrón normalizado: 0 en el centro del punto, 1 en la esquina de la celda
-        if shape == 'line':
-            pattern = np.abs(dy) / (scale / 2)
-        elif shape == 'ellipse':
-            aspect = 1.4  # Eje menor = 1/1.4 del mayor; celda cuadrada, misma lineatura
-            pattern = np.sqrt(dx**2 + (dy * aspect)**2)
-            pattern /= np.sqrt((scale / 2)**2 + (scale / 2 * aspect)**2)
-        elif shape == 'diamond':
-            pattern = (np.abs(dx) + np.abs(dy)) / scale
-        else: # Círculo
-            pattern = np.sqrt(dx**2 + dy**2)
-            pattern /= (scale / np.sqrt(2))
-
-
-        # Crear la máscara de semitonos comparando la imagen con el patrón
-        # La distancia radial crece más rápido que el área del punto. Esta
-        # corrección conserva mejor los medios tonos al convertirlos a puntos.
-        ink_level = np.power(image_norm, 0.85)
-        halftone_mask = (ink_level < pattern).astype(np.uint8) * 255
-        return halftone_mask
-    
     def _regenerate_single_halftone(self, channel_name):
-        """
-        VERSIÓN OPTIMIZADA de tu función existente - REEMPLAZA la que tienes
-        """
+        """Vuelve a tramar un canal de la vista previa tras cambiar su umbral."""
         if channel_name not in self.channel_arrays:
             return
-            
-        try:
-            # Obtener parámetros (tu código existente)
-            scale, shape, angles = self._get_halftone_params()
-            angle = angles.get(channel_name, 0)
-            threshold = self.channel_thresholds[channel_name]
-            
-            # Obtener datos originales
-            original_channel_data = self.channel_arrays[channel_name]
-            
-            # Aplicar ajuste de niveles (tu función existente)
-            adjusted_channel_data = self._adjust_levels(original_channel_data, threshold)
-            
-            # Generar halftone (tu función existente)
-            self.preview_cache[channel_name] = self._generate_halftone_pattern(
-                adjusted_channel_data, scale, shape, angle
-            )
-            
-        except Exception as e:
-            print(f"❌ Error regenerando halftone: {e}")
+        settings = self.job_settings()
+        self.preview_cache[channel_name] = screen_channel(
+            self.channel_arrays[channel_name], channel_name, settings, self.preview_scale)
 
-    def _adjust_levels(self, image, threshold):
-        """
-        Ajusta los niveles de una imagen en escala de grises usando una corrección gamma.
-        El 'threshold' del slider controla el punto medio de la curva de intensidad.
-        """
-        # El valor del slider (0-255) se convierte a un factor gamma.
-        # El valor 128 es el punto neutro (gamma = 1.0).
-        # Un valor más bajo en el slider resulta en una imagen más oscura (más tinta).
-        # Un valor más alto en el slider resulta en una imagen más clara (menos tinta).
-        
-        # Se invierte la lógica para que sea intuitivo: slider a la izquierda = más oscuro.
-        gamma = threshold / 128.0
-        if gamma == 0: gamma = 0.01 # Evitar división por cero
-        
-        # La corrección gamma se aplica con la fórmula: O = I ^ (1/gamma)
-        inv_gamma = 1.0 / gamma
-        
-        # Se crea una tabla de consulta para aplicar la corrección de forma eficiente.
-        table = np.array([
-            ((i / 255.0) ** inv_gamma) * 255
-            for i in np.arange(0, 256)
-        ]).astype("uint8")
-        
-        # Se aplica la tabla de corrección a la imagen.
-        return cv2.LUT(image, table)
-    
     def update_preview(self):
         """
         VERSIÓN OPTIMIZADA de tu función existente - REEMPLAZA la que tienes
@@ -2356,55 +1959,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         except Exception as e:
             print(f"❌ Error en vista previa compuesta: {e}")
-
-    def generate_quick_halftone(self, channel_data, angle, scale):
-        """
-        CORREGIDO: Genera un patrón de halftone clásico con puntos circulares.
-        Esta versión crea puntos cuyo tamaño depende de la intensidad de la imagen y 
-        cuya frecuencia (LPI) depende del 'scale' correctamente.
-        """
-        try:
-            h, w = channel_data.shape
-            
-            # 1. Crear una grilla de coordenadas
-            y_coords, x_coords = np.mgrid[0:h, 0:w].astype(np.float32)
-
-            # 2. Rotar la grilla según el ángulo del canal
-            angle_rad = np.radians(angle)
-            cos_a, sin_a = np.cos(angle_rad), np.sin(angle_rad)
-            x_rot = x_coords * cos_a - y_coords * sin_a
-            y_rot = x_coords * sin_a + y_coords * cos_a
-
-            # 3. Crear el patrón de puntos usando la grilla rotada y la escala
-            # El operador módulo (%) crea una grilla repetitiva (la base del halftone)
-            dot_pattern = np.sqrt(
-                ((x_rot % scale) - scale / 2) ** 2 +
-                ((y_rot % scale) - scale / 2) ** 2
-            )
-            
-            # 4. Normalizar el patrón (0 = centro del punto, 1 = borde)
-            max_dist = scale / 2 * np.sqrt(2)
-            dot_pattern_norm = np.clip(dot_pattern / (scale / 2), 0, 1)
-
-            # 5. Normalizar la imagen del canal (0 = negro, 1 = blanco)
-            image_norm = channel_data.astype(np.float32) / 255.0
-            
-            # 6. Generar el halftone: un píxel se convierte en punto si su
-            # intensidad en la imagen es mayor que su valor en el patrón de puntos.
-            halftone = (image_norm > dot_pattern_norm).astype(np.uint8) * 255
-            
-            # Devolvemos la máscara invertida: los puntos son negros (0) y el fondo blanco (255)
-            return cv2.bitwise_not(halftone)
-
-        except Exception as e:
-            print(f"❌ Error en generate_quick_halftone: {e}")
-            # Si falla, devuelve la imagen original sin procesar
-            return channel_data
-        
-    def create_circular_dots(dot_pattern):
-        """Crear puntos más circulares"""
-        return np.sin(dot_pattern * np.pi) * 0.8
-    
 
     def on_threshold_changed(self):
         """
@@ -2511,133 +2065,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"⚠️ Error en clear_preview: {e}")
 
-    def generate_simple_halftone_pattern(self, channel_data, threshold, channel_name):
-        """
-        Genera halftones simples pero efectivos - CON UMBRAL FUNCIONAL
-        """
-        try:
-            print(f"🎯 Generando halftone para {channel_name} con umbral {threshold}")
-            
-            # Normalizar datos del canal
-            normalized_data = channel_data.astype(np.float32) / 255.0
-            
-            # Crear patrón de puntos
-            height, width = channel_data.shape
-            dot_size = self.get_simple_dot_size(channel_name)
-            angle = self.get_halftone_angle(channel_name)
-            
-            # Crear grilla de coordenadas
-            y, x = np.mgrid[0:height, 0:width]
-            
-            # Aplicar rotación
-            angle_rad = np.radians(angle)
-            x_rot = x * np.cos(angle_rad) - y * np.sin(angle_rad)
-            y_rot = x * np.sin(angle_rad) + y * np.cos(angle_rad)
-            
-            # Crear patrón de puntos
-            pattern_x = (x_rot % dot_size) - dot_size/2
-            pattern_y = (y_rot % dot_size) - dot_size/2
-            distance = np.sqrt(pattern_x**2 + pattern_y**2)
-            
-            # Normalizar patrón
-            max_distance = dot_size / 2
-            pattern = np.clip(distance / max_distance, 0.0, 1.0)
-            
-            # APLICAR UMBRAL - El umbral modifica el tamaño de los puntos
-            if threshold != 64 and channel_name == 'K':  # Para canal K
-                default_threshold = 64
-            elif threshold != 128:  # Para otros canales
-                default_threshold = 128
-            else:
-                default_threshold = threshold
-                
-            if threshold != default_threshold:
-                # EFECTO MÁS DRAMÁTICO Y VISIBLE
-                if threshold > default_threshold:
-                    # Umbral alto = puntos MUY pequeños (imagen mucho más clara)
-                    intensity_factor = 0.3 + (threshold - default_threshold) / 255.0 * 1.2
-                    adjusted_intensity = np.power(normalized_data, intensity_factor)
-                else:
-                    # Umbral bajo = puntos MUY grandes (imagen mucho más oscura)  
-                    intensity_factor = 2.5 - threshold / 255.0 * 1.8
-                    adjusted_intensity = np.power(normalized_data, 1.0/intensity_factor)
-                    
-                print(f"   🎯 Umbral {threshold} aplicado - factor DRAMÁTICO: {intensity_factor:.2f}")
-            else:
-                adjusted_intensity = normalized_data
-            
-            # Crear máscara de halftones con intensidad ajustada
-            halftone_mask = (pattern < adjusted_intensity).astype(np.float32)
-            
-            # Suavizado mínimo
-            try:
-                from scipy import ndimage
-                halftone_mask = ndimage.gaussian_filter(halftone_mask, sigma=0.2)
-            except ImportError:
-                pass
-            
-            print(f"✅ Halftone para {channel_name} - densidad: {np.mean(halftone_mask):.3f}")
-            return halftone_mask
-        
-        except Exception as e:
-            print(f"⚠️ Error en halftone: {e}")
-            # Fallback: usar datos originales normalizados
-            return channel_data.astype(np.float32) / 255.0
-        
-    def get_simple_dot_size(self, channel_name):
-        """
-        Tamaños de punto simples para halftones efectivos
-        """
-        sizes = {
-            'C': 8,    # Cian
-            'M': 9,    # Magenta  
-            'Y': 6,    # Amarillo
-            'K': 10,   # Negro
-            'W': 7     # Blanco
-        }
-        return sizes.get(channel_name, 8)
-
-        
-    def auto_adjust_based_on_image(self, canvas, selected_channels):
-        """
-        Ajustes automáticos basados en el contenido de la imagen
-        """
-        # Analizar el contenido de la imagen
-        avg_brightness = np.mean(canvas)
-        avg_saturation = np.std(canvas)
-        
-        print(f"📊 Análisis automático - Brillo: {avg_brightness:.3f}, Saturación: {avg_saturation:.3f}")
-        
-        # Ajustes automáticos basados en contenido
-        if avg_brightness < 0.3:
-            # Imagen oscura - aumentar brillo
-            canvas = np.clip(canvas + 0.1, 0.0, 1.0)
-            print("🔆 Imagen oscura detectada - aumentando brillo")
-        elif avg_brightness > 0.8:
-            # Imagen muy clara - reducir ligeramente
-            canvas = np.clip(canvas * 0.95, 0.0, 1.0)
-            print("🔅 Imagen muy clara detectada - reduciendo brillo")
-        
-        if avg_saturation > 0.3:
-            # Imagen muy contrastada - suavizar ligeramente
-            canvas = np.clip((canvas - 0.5) * 0.9 + 0.5, 0.0, 1.0)
-            print("🎨 Alto contraste detectado - suavizando")
-        
-        return canvas
-
-    def get_halftone_dot_size(self, channel_name):
-        """
-        Tamaños de punto optimizados para equilibrio visual
-        """
-        sizes = {
-            'C': 7,    # Cian: puntos medianos
-            'M': 8,    # Magenta: puntos medianos-grandes  
-            'Y': 5,    # Amarillo: puntos pequeños (evita interferencia)
-            'K': 9,    # Negro: puntos grandes (más definición)
-            'W': 6     # Blanco: puntos medianos-pequeños
-        }
-        return sizes.get(channel_name, 7)
-
     def should_show_halftones(self):
         """
         Determina si mostrar halftones en vista previa basado en el checkbox
@@ -2737,9 +2164,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                     test_value = int((percent / 100.0) * 255)
                     test_cell = np.full((cell_size, cell_size), test_value, dtype=np.uint8)
 
-                    # Aplicar halftone con forma redonda por defecto
-                    scale = max(3, int(300 / lpi))
-                    halftoned_cell = apply_simple_halftone(test_cell, scale, 'circle')
+                    # Misma trama que los positivos: celda = 300 dpi / LPI
+                    halftoned_cell = halftone(test_cell, 300 / lpi, 'circle', 0)
 
                     # Colocar en plantilla
                     template_img[y_start:y_start+cell_size, x_start:x_start+cell_size] = halftoned_cell
@@ -2748,7 +2174,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"plantilla_ganancia_{timestamp}.png"
             filepath = os.path.join(self.output_dir, filename)
-            cv2.imwrite(filepath, template_img)
+            output.save_png(filepath, template_img, 300)
 
             # Crear archivo de instrucciones
             info_filename = f"instrucciones_ganancia_{timestamp}.txt"
@@ -2933,48 +2359,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         except Exception as e:
             self.moire_result_label.setText(f"Error: {str(e)}")
 
-    def apply_calculated_lpi(self, dialog):
-        """Aplicar LPI calculado al proyecto actual"""
-        try:
-            # Obtener el LPI calculado de la pestaña activa
-            optimal_lpi = None
-
-            # Desde pestaña de malla
-            if hasattr(self, 'lpi_result_label'):
-                text = self.lpi_result_label.text()
-                import re
-                match = re.search(r'LPI Calculado: (\d+)', text)
-                if match:
-                    optimal_lpi = int(match.group(1))
-
-            if optimal_lpi:
-                # Buscar en LPI_VALUES la opción más cercana
-                closest_option = None
-                min_diff = float('inf')
-
-                for lpi_option in LPI_VALUES.keys():
-                    lpi_num = int(lpi_option.split()[0])
-                    diff = abs(lpi_num - optimal_lpi)
-                    if diff < min_diff:
-                        min_diff = diff
-                        closest_option = lpi_option
-
-                if closest_option:
-                    # Aplicar al combo box principal
-                    self.lpi_combo.setCurrentText(closest_option)
-                    dialog.accept()
-
-                    msg = f"✅ LPI aplicado al proyecto:\n{closest_option}\n\nPuedes procesar la imagen con esta configuración optimizada."
-                    QtWidgets.QMessageBox.information(self, "LPI Aplicado", msg)
-                    self.status_bar.showMessage(f"✅ LPI optimizado aplicado: {closest_option}", 5000)
-                else:
-                    QtWidgets.QMessageBox.warning(self, "Aviso", "No se encontró una opción LPI compatible en el sistema.")
-            else:
-                QtWidgets.QMessageBox.warning(self, "Aviso", "No se pudo obtener el LPI calculado.")
-
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, "Error", f"Error al aplicar LPI:\n{str(e)}")
-
     def export_lpi_calculations(self, dialog):
         """Exportar cálculos de LPI a archivo"""
         try:
@@ -3021,462 +2405,109 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(dialog, "Error", f"Error al exportar:\n{str(e)}")
 
-    def _create_specifications_file(self, folder_path, timestamp, saved_files, print_format, output_dpi):
-        """
-        NUEVA FUNCIÓN: Crear archivo de especificaciones mejorado
-        """
-        spec_filename = f"especificaciones_{timestamp}.txt"
-        spec_filepath = os.path.join(folder_path, spec_filename)
-        
-        # Obtener información del formato
-        format_name = self.print_format_combo.currentText()
-        if format_name == "Personalizado":
-            format_display = "Formato Personalizado"
-        else:
-            format_display = format_name
-        
-        with open(spec_filepath, 'w', encoding='utf-8') as f:
-            f.write("ESPECIFICACIONES DE TRABAJO SERIGRÁFICO\n")
-            f.write("=" * 50 + "\n\n")
-            f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"Formato: {format_display}\n")
-            f.write(f"Dimensiones: {print_format['width']}x{print_format['height']}mm\n")
-            f.write(f"DPI de salida: {output_dpi}\n")
-            f.write(f"Lineatura: {self.lpi_combo.currentText()}\n")
-            f.write(f"Forma de punto: {self.shape_combo.currentText()}\n")
-            f.write(f"Guías de registro: {'SÍ' if self.guides_cb.isChecked() else 'NO'}\n")
-            f.write(f"Base blanca: {'SÍ' if self.white_base_cb.isChecked() else 'NO'}\n")
-            f.write(f"Ajustar al formato: {'SÍ' if self.fit_format_cb.isChecked() else 'NO'}\n")
-            f.write(f"Color de prenda: {self.garment_color.name()}\n\n")
-            
-            # Información de imagen original
-            if hasattr(self, 'image_info') and self.image_info:
-                f.write("IMAGEN ORIGINAL:\n")
-                f.write("-" * 20 + "\n")
-                f.write(f"Archivo: {os.path.basename(self.image_info.get('file_path', 'N/A'))}\n")
-                f.write(f"Resolución original: {self.image_info.get('width_px', 'N/A')}x{self.image_info.get('height_px', 'N/A')}px\n")
-                f.write(f"DPI original: {self.image_info.get('dpi_x', 'N/A')}\n")
-                f.write(f"Tamaño original: {self.image_info.get('width_cm', 'N/A'):.1f}x{self.image_info.get('height_cm', 'N/A'):.1f}cm\n\n")
-            
-            f.write("ORDEN DE IMPRESIÓN:\n")
-            f.write("-" * 20 + "\n")
-            for i, channel in enumerate(self.channel_order, 1):
-                if channel in self.preview_cache:
-                    color = self.channel_colors[channel]
-                    threshold = self.channel_thresholds.get(channel, 128)
-                    f.write(f"{i}. Canal {channel} - Color: {color.name()} - Umbral: {threshold}\n")
-            
-            f.write("\nARCHIVOS GENERADOS:\n")
-            f.write("-" * 20 + "\n")
-            for filename in saved_files:
-                f.write(f"• {filename}\n")
-                
-            f.write("\nNOTAS TÉCNICAS:\n")
-            f.write("-" * 15 + "\n")
-            f.write("• Los positivos están listos para grabado de pantallas\n")
-            f.write("• Verificar orientación correcta al grabar\n")
-            f.write("• Usar emulsión fotopolimérica de calidad\n")
-            f.write("• Comprobar registro antes de producción masiva\n")
-
-    def _resize_and_center_for_output(self, image, target_width, target_height):
-        """
-        NUEVA FUNCIÓN: Redimensiona y centra la imagen para el formato de salida
-        """
-        try:
-            print(f"📐 Redimensionando de {image.shape} a {target_width}x{target_height}")
-            
-            # Obtener dimensiones actuales
-            current_height, current_width = image.shape[:2]
-            
-            # Calcular factor de escala para ajustar manteniendo proporción
-            scale_x = target_width / current_width
-            scale_y = target_height / current_height
-            
-            # Usar el factor menor para que quepa completo
-            scale_factor = min(scale_x, scale_y)
-            
-            # Solo escalar si es necesario hacer más pequeño o si queremos agrandar
-            if self.fit_format_cb.isChecked() or scale_factor < 1.0:
-                # Redimensionar manteniendo proporción
-                new_width = int(current_width * scale_factor)
-                new_height = int(current_height * scale_factor)
-                
-                resized = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
-                print(f"🔄 Imagen redimensionada a {new_width}x{new_height} (factor: {scale_factor:.3f})")
-            else:
-                # Mantener tamaño original si cabe y no se fuerza ajuste
-                resized = image
-                new_width, new_height = current_width, current_height
-                print(f"📏 Manteniendo tamaño original {new_width}x{new_height}")
-            
-            # Crear canvas del tamaño final
-            final_canvas = np.ones((target_height, target_width), dtype=np.uint8) * 255  # Fondo blanco
-            
-            # Calcular posición para centrar
-            start_x = (target_width - new_width) // 2
-            start_y = (target_height - new_height) // 2
-            
-            # Asegurar que la imagen cabe
-            end_x = start_x + new_width
-            end_y = start_y + new_height
-            
-            if end_x <= target_width and end_y <= target_height:
-                final_canvas[start_y:end_y, start_x:end_x] = resized
-                print(f"✅ Imagen centrada en posición ({start_x}, {start_y})")
-            else:
-                # Si no cabe, recortar o ajustar
-                final_canvas = cv2.resize(resized, (target_width, target_height), interpolation=cv2.INTER_AREA)
-                print(f"⚠️ Imagen ajustada forzosamente al tamaño objetivo")
-            
-            return final_canvas
-            
-        except Exception as e:
-            print(f"❌ Error en redimensionado: {e}")
-            # Fallback: redimensionar directo
-            return cv2.resize(image, (target_width, target_height), interpolation=cv2.INTER_AREA)
-        
-    def verify_halftone_quality(self, image_data, description=""):
-        """
-        NUEVA FUNCIÓN: Verificar calidad de halftone
-        """
-        try:
-            print(f"\n🔍 === VERIFICACIÓN DE CALIDAD: {description} ===")
-            
-            # Análisis básico
-            unique_values = np.unique(image_data)
-            print(f"Valores únicos: {len(unique_values)}")
-            print(f"Rango: {image_data.min()} - {image_data.max()}")
-            
-            # Para halftones, deberíamos tener solo 0 y 255
-            if len(unique_values) == 2 and 0 in unique_values and 255 in unique_values:
-                print(f"✅ Halftone binario correcto (solo 0 y 255)")
-            else:
-                print(f"⚠️ Halftone con valores intermedios: {unique_values}")
-            
-            # Análisis de distribución de puntos
-            black_pixels = np.sum(image_data == 0)
-            white_pixels = np.sum(image_data == 255)
-            total_pixels = image_data.size
-            
-            black_percentage = (black_pixels / total_pixels) * 100
-            
-            print(f"Distribución: {black_percentage:.1f}% negro, {100-black_percentage:.1f}% blanco")
-            
-            # Verificar patrones de halftone
-            if black_percentage > 0 and black_percentage < 100:
-                print(f"✅ Distribución de puntos normal")
-            elif black_percentage == 0:
-                print(f"⚠️ Imagen completamente blanca")
-            elif black_percentage == 100:
-                print(f"⚠️ Imagen completamente negra")
-            
-            return {
-                'unique_values': len(unique_values),
-                'is_binary': len(unique_values) == 2,
-                'black_percentage': black_percentage,
-                'quality_score': 'GOOD' if len(unique_values) == 2 else 'POOR'
-            }
-            
-        except Exception as e:
-            print(f"❌ Error en verificación: {e}")
-            return {'quality_score': 'ERROR'}
-
     def save_results(self):
         """
-        VERSIÓN TOTALMENTE CORREGIDA: Guarda respetando medidas y guías
+        Exporta los positivos a resolución completa: un PNG por canal (con DPI),
+        un PDF por página de canal, las especificaciones y la configuración
+        del trabajo en JSON para poder repetirlo.
         """
-        if not self.preview_cache:
-            QtWidgets.QMessageBox.warning(self, "Aviso", "Procesa la imagen primero")
+        if self.image is None or not self.preview_cache:
+            QtWidgets.QMessageBox.warning(self, "Nada que exportar",
+                                          "Abre una imagen y pulsa «Separar colores» antes de exportar.")
             return
-            
-        try:
-            folder_path = QtWidgets.QFileDialog.getExistingDirectory(
-                self, "Seleccionar Carpeta para Guardar", self.output_dir)
-            if not folder_path:
-                return
 
+        folder_path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Carpeta para los positivos", self.output_dir)
+        if not folder_path:
+            return
+
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            settings = self.job_settings()
+            self.status_bar.showMessage("Generando positivos a resolución completa…")
+            QtWidgets.QApplication.processEvents()
+
+            _, screens, _ = render(self.image, self.image_alpha, settings, preview=False)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             saved_files = []
-            
-            print(f"\n💾 === GUARDADO CORREGIDO CON GUÍAS ===")
-            
-            # Obtener configuración de formato
-            print_format = self.get_current_print_format()
-            output_dpi = print_format["dpi_recommended"]
-            
-            guides_enabled = self.guides_cb.isChecked()
-            fit_format_enabled = self.fit_format_cb.isChecked()
-            
-            print(f"🎯 Guías de registro: {'✅ ACTIVADAS' if guides_enabled else '❌ DESACTIVADAS'}")
-            print(f"📏 Ajustar formato: {'✅ ACTIVADO' if fit_format_enabled else '❌ DESACTIVADO'}")
-            print(f"📐 Formato: {self.print_format_combo.currentText()}")
-            print(f"📊 DPI de salida: {output_dpi}")
-            print(f"📄 Dimensiones papel: {print_format['width']}x{print_format['height']}mm")
-            
-            # PROCESAR CADA CANAL
-            for i, channel in enumerate(self.channel_order):
-                if channel not in self.preview_cache:
-                    continue
-                    
-                print(f"\n🔄 === PROCESANDO CANAL {channel} ({i+1}/{len(self.channel_order)}) ===")
-                
-                # PASO 1: Obtener datos del canal (calidad perfecta)
-                channel_img = self.preview_cache[channel].copy()
-                original_shape = channel_img.shape
-                unique_before = len(np.unique(channel_img))
-                
-                print(f"   📊 Original: {original_shape}, valores únicos: {unique_before}")
-                
-                # PASO 2: Aplicar gu��as de registro ANTES de cualquier redimensionado
-                if guides_enabled:
-                    print(f"   🎯 APLICANDO GUÍAS DE REGISTRO...")
-                    final_img = self.add_registration_guides(channel_img, channel, output_dpi)
-                    
-                    # Verificar que las guías se aplicaron
-                    if final_img.shape != original_shape:
-                        print(f"   ✅ GUÍAS APLICADAS: {original_shape} → {final_img.shape}")
-                    else:
-                        print(f"   ⚠️ ADVERTENCIA: Las guías no cambiaron el tamaño")
-                else:
-                    print(f"   ⏭️ Sin guías - usando imagen original")
-                    final_img = channel_img
-                
-                # PASO 3: Verificar calidad final
-                unique_after = len(np.unique(final_img))
-                print(f"   📈 Calidad final: valores únicos = {unique_after}")
-                
-                if unique_after <= 3:  # Esperamos: 0 (negro), 255 (blanco), y posibles grises de anti-aliasing
-                    print(f"   ✅ Calidad preservada")
-                else:
-                    print(f"   ⚠️ Valores adicionales detectados (normal para texto/guías)")
-                
-                # PASO 4: Guardar archivo
-                filename = f"POSITIVO_{channel}_{timestamp}.png"
-                filepath = os.path.join(folder_path, filename)
-                
-                # PIL guarda el DPI en el PNG; con cv2.imwrite el RIP asumía 72/96 dpi
-                # y el positivo salía a otro tamaño físico.
-                try:
-                    Image.fromarray(final_img).save(filepath, dpi=(output_dpi, output_dpi))
-                    success = True
-                except (OSError, ValueError) as save_error:
-                    print(f"   ❌ {save_error}")
-                    success = False
-                if success:
-                    saved_files.append(filename)
-                    file_size = os.path.getsize(filepath) / (1024 * 1024)
-                    print(f"   ✅ GUARDADO: {filename} ({file_size:.1f}MB)")
-                    
-                    # Verificar archivo guardado
-                    verification_img = cv2.imread(filepath, cv2.IMREAD_GRAYSCALE)
-                    if verification_img is not None:
-                        saved_shape = verification_img.shape
-                        saved_unique = len(np.unique(verification_img))
-                        print(f"   🔍 Verificación: {saved_shape}, valores únicos: {saved_unique}")
-                        
-                        if guides_enabled and saved_shape == final_img.shape:
-                            print(f"   ✅ ARCHIVO GUARDADO CORRECTAMENTE CON GUÍAS")
-                        elif not guides_enabled:
-                            print(f"   ✅ ARCHIVO GUARDADO SIN GUÍAS (como esperado)")
-                        else:
-                            print(f"   ⚠️ Posible problema en el guardado")
-                    else:
-                        print(f"   ❌ ERROR: No se pudo verificar el archivo guardado")
-                else:
-                    print(f"   ❌ ERROR: Falló el guardado de {filename}")
-            
-            # CREAR PDFs
-            print(f"\n📄 === CREANDO PDFs ===")
-            
-            # PDF limpio (sin guías) - SIEMPRE
-            images_clean = []
-            for channel in self.channel_order:
-                if channel in self.preview_cache:
-                    clean_img = self.preview_cache[channel]
-                    pil_img = Image.fromarray(clean_img).convert("L")
-                    images_clean.append(pil_img)
-            
-            if images_clean:
-                pdf_path_clean = os.path.join(folder_path, f"cmyk_limpio_{timestamp}.pdf")
-                images_clean[0].save(pdf_path_clean, save_all=True, append_images=images_clean[1:],
-                                     resolution=output_dpi)
-                saved_files.append(f"cmyk_limpio_{timestamp}.pdf")
-                print(f"✅ PDF limpio creado: cmyk_limpio_{timestamp}.pdf")
 
-            # PDF con guías (solo si están habilitadas)
-            if guides_enabled:
-                print(f"📄 Creando PDF con guías...")
-                images_with_guides = []
-                for channel in self.channel_order:
-                    if channel in self.preview_cache:
-                        img_with_guides = self.add_registration_guides(
-                            self.preview_cache[channel], channel, output_dpi)
-                        pil_img = Image.fromarray(img_with_guides).convert("L")
-                        images_with_guides.append(pil_img)
-                        
-                if images_with_guides:
-                    pdf_path_guides = os.path.join(folder_path, f"cmyk_con_guias_{timestamp}.pdf")
-                    images_with_guides[0].save(pdf_path_guides, save_all=True, append_images=images_with_guides[1:],
-                                                resolution=output_dpi)
-                    saved_files.append(f"cmyk_con_guias_{timestamp}.pdf")
-                    print(f"✅ PDF con guías creado: cmyk_con_guias_{timestamp}.pdf")
-            
-            # CREAR ESPECIFICACIONES
-            spec_filename = f"especificaciones_{timestamp}.txt"
-            spec_filepath = os.path.join(folder_path, spec_filename)
-            
-            with open(spec_filepath, 'w', encoding='utf-8') as f:
-                f.write("ESPECIFICACIONES DE TRABAJO SERIGRÁFICO\n")
-                f.write("=" * 50 + "\n\n")
-                f.write(f"Fecha y hora: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write(f"Aplicación: Asistente de Serigrafía Profesional\n\n")
-                
-                f.write("CONFIGURACIÓN DE FORMATO:\n")
-                f.write("-" * 30 + "\n")
-                f.write(f"Formato seleccionado: {self.print_format_combo.currentText()}\n")
-                f.write(f"Dimensiones del papel: {print_format['width']} x {print_format['height']} mm\n")
-                f.write(f"DPI de salida: {output_dpi}\n")
-                f.write(f"Ajustar al formato: {'SÍ' if fit_format_enabled else 'NO'}\n")
-                f.write(f"Guías de registro: {'SÍ' if guides_enabled else 'NO'}\n")
-                if guides_enabled:
-                    f.write(f"Margen para guías: {REGISTRATION_GUIDE_SETTINGS['margin_mm']} mm\n")
-                    f.write(f"Tamaño de cruces: {REGISTRATION_GUIDE_SETTINGS['cross_size_mm']} mm\n")
-                f.write("\n")
-                
-                f.write("CONFIGURACIÓN DE HALFTONE:\n")
-                f.write("-" * 30 + "\n")
-                f.write(f"Lineatura (LPI): {self.lpi_combo.currentText()}\n")
-                f.write(f"Forma de punto: {self.shape_combo.currentText()}\n")
-                f.write(f"Mejora de resolución: {self.resolution_combo.currentText()}\n")
-                f.write(f"Base blanca incluida: {'SÍ' if self.white_base_cb.isChecked() else 'NO'}\n")
-                f.write(f"Color de prenda: {self.garment_color.name()}\n\n")
-                
-                f.write("ORDEN DE IMPRESIÓN Y UMBRALES:\n")
-                f.write("-" * 35 + "\n")
-                for i, channel in enumerate(self.channel_order, 1):
-                    if channel in self.preview_cache:
-                        threshold = self.channel_thresholds.get(channel, 128)
-                        color = self.channel_colors[channel].name()
-                        f.write(f"{i}. Canal {channel} - Color: {color} - Umbral: {threshold}\n")
-                f.write("\n")
-                
-                if hasattr(self, 'image_info') and self.image_info:
-                    f.write("INFORMACIÓN DE IMAGEN ORIGINAL:\n")
-                    f.write("-" * 35 + "\n")
-                    f.write(f"Archivo: {os.path.basename(self.image_info.get('file_path', 'N/A'))}\n")
-                    f.write(f"Dimensiones originales: {self.image_info.get('width_px', 'N/A')} x {self.image_info.get('height_px', 'N/A')} px\n")
-                    f.write(f"DPI original: {self.image_info.get('dpi_x', 'N/A')}\n")
-                    f.write(f"Tamaño físico original: {self.image_info.get('width_cm', 'N/A'):.1f} x {self.image_info.get('height_cm', 'N/A'):.1f} cm\n\n")
-                
-                f.write("ARCHIVOS GENERADOS:\n")
-                f.write("-" * 20 + "\n")
-                for filename in saved_files:
-                    f.write(f"• {filename}\n")
-                    
-                f.write("\nINSTRUCCIONES DE USO:\n")
-                f.write("-" * 20 + "\n")
-                f.write("1. Los archivos PNG están listos para grabado de pantallas\n")
-                f.write("2. Usar emulsión fotopolimérica de calidad profesional\n")
-                f.write("3. Verificar orientación correcta al exponer\n")
-                if guides_enabled:
-                    f.write("4. Las guías de registro ayudan en el centrado y alineación\n")
-                    f.write("5. Las cruces en esquinas son para registro preciso\n")
-                    f.write("6. Las marcas centrales facilitan el posicionamiento\n")
-                f.write("7. Realizar prueba de impresión antes de producción masiva\n")
-                f.write("8. Los PDFs contienen todos los canales en páginas separadas\n")
-                
-                f.write("\nDATOS TÉCNICOS:\n")
-                f.write("-" * 15 + "\n")
-                f.write("• Halftones optimizados para calidad profesional\n")
-                f.write("• Valores binarios preservados (0 y 255)\n")
-                f.write("• Interpolación INTER_NEAREST para redimensionado\n")
-                f.write("• Ángulos de canal anti-moiré aplicados automáticamente\n")
-                if guides_enabled:
-                    f.write("• Guías de registro incluidas según estándares profesionales\n")
-                    f.write(f"• Margen de {REGISTRATION_GUIDE_SETTINGS['margin_mm']}mm para manipulación\n")
-            
-            saved_files.append(spec_filename)
-            
-            # MENSAJE FINAL DETALLADO
-            success_msg = f"✅ GUARDADO COMPLETADO EXITOSAMENTE\n\n"
-            success_msg += f"📁 Ubicación: {folder_path}\n\n"
-            success_msg += f"📊 Archivos generados: {len(saved_files)}\n\n"
-            
-            success_msg += "📋 Lista de archivos:\n"
-            for i, filename in enumerate(saved_files, 1):
-                success_msg += f"   {i}. {filename}\n"
-            
-            if guides_enabled:
-                success_msg += f"\n🎯 LAS GUÍAS DE REGISTRO HAN SIDO APLICADAS CORRECTAMENTE\n"
-                success_msg += f"   • Cruces de registro en las 4 esquinas\n"
-                success_msg += f"   • Marcas de centrado en los bordes\n"
-                success_msg += f"   • Información del canal en cada positivo\n"
-                success_msg += f"   • Margen de {REGISTRATION_GUIDE_SETTINGS['margin_mm']}mm para manipulación\n"
-            
-            if fit_format_enabled:
-                success_msg += f"\n📏 FORMATO RESPETADO:\n"
-                success_msg += f"   • Papel: {print_format['width']} x {print_format['height']} mm\n"
-                success_msg += f"   • DPI: {output_dpi}\n"
-                success_msg += f"   • Imagen centrada y escalada apropiadamente\n"
-            
-            success_msg += f"\n💡 NOTAS IMPORTANTES:\n"
-            success_msg += f"   • Los archivos PNG están listos para grabado\n"
-            success_msg += f"   • Los PDFs contienen páginas separadas por canal\n"
-            success_msg += f"   • Revisa las especificaciones técnicas en el archivo .txt\n"
-            
-            QtWidgets.QMessageBox.information(self, "🎉 Guardado Exitoso", success_msg)
-            self.status_bar.showMessage(f"✅ {len(saved_files)} archivos guardados con guías", 10000)
-            
-            print(f"\n🎉 === GUARDADO COMPLETADO ===")
-            print(f"📁 Archivos: {len(saved_files)}")
-            print(f"🎯 Guías: {'✅ INCLUIDAS' if guides_enabled else '❌ SIN GUÍAS'}")
-            print(f"📏 Formato: {'✅ RESPETADO' if fit_format_enabled else '❌ TAMAÑO ORIGINAL'}")
-            
+            positives, clean_pages = [], []
+            for channel in settings.channels():
+                screen = screens[channel]
+                positive = output.finish_positive(screen, channel, settings)
+                filename = f"POSITIVO_{channel}_{timestamp}.png"
+                output.save_png(os.path.join(folder_path, filename), positive, settings.dpi)
+                saved_files.append(filename)
+                positives.append(positive)
+                clean_pages.append(output.place_on_paper(screen, settings) if settings.fit_to_paper else screen)
+
+            pdf_name = f"cmyk_limpio_{timestamp}.pdf"
+            output.save_pdf(os.path.join(folder_path, pdf_name), clean_pages, settings.dpi)
+            saved_files.append(pdf_name)
+            if settings.registration_guides:
+                pdf_name = f"cmyk_con_guias_{timestamp}.pdf"
+                output.save_pdf(os.path.join(folder_path, pdf_name), positives, settings.dpi)
+                saved_files.append(pdf_name)
+
+            config_name = f"configuracion_{timestamp}.json"
+            settings.save(os.path.join(folder_path, config_name))
+            saved_files.append(config_name)
+
+            spec_name = f"especificaciones_{timestamp}.txt"
+            self._write_specifications(os.path.join(folder_path, spec_name), settings, saved_files, positives)
+            saved_files.append(spec_name)
+
+            height_px, width_px = positives[0].shape
+            size_mm = f"{width_px / settings.dpi * 25.4:.0f}×{height_px / settings.dpi * 25.4:.0f} mm"
+            self.status_bar.showMessage(
+                f"Exportados {len(settings.channels())} positivos de {size_mm} a {settings.dpi} DPI en {folder_path}",
+                15000)
+            QtWidgets.QMessageBox.information(
+                self, "Positivos exportados",
+                f"{len(saved_files)} archivos en:\n{folder_path}\n\n"
+                f"Positivos de {size_mm} a {settings.dpi} DPI, {settings.lpi:g} LPI.\n\n"
+                + "\n".join(saved_files))
+
         except Exception as e:
-            error_msg = f"❌ ERROR DURANTE EL GUARDADO:\n\n{str(e)}\n\nDetalles en la consola."
-            print(f"\n❌ ERROR CRÍTICO: {error_msg}")
             import traceback
             traceback.print_exc()
-            QtWidgets.QMessageBox.critical(self, "❌ Error de Guardado", error_msg)
+            QtWidgets.QMessageBox.critical(self, "No se pudo exportar",
+                                           f"{e}\n\nRevisa que la carpeta exista y tenga permiso de escritura.")
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
 
-    def debug_preview_cache(self):
-        """
-        NUEVA FUNCIÓN: Para verificar qué hay exactamente en preview_cache
-        Agrégala a tu clase y puedes llamarla manualmente
-        """
-        try:
-            print(f"\n🔍 === DEBUG PREVIEW CACHE ===")
-            
-            if not self.preview_cache:
-                print(f"❌ Preview cache está vacío")
-                return
-            
-            for channel, data in self.preview_cache.items():
-                print(f"\n📊 Canal {channel}:")
-                print(f"   Tipo: {type(data)}")
-                print(f"   Shape: {data.shape}")
-                print(f"   Dtype: {data.dtype}")
-                print(f"   Rango: {data.min()} - {data.max()}")
-                
-                unique_vals = np.unique(data)
-                print(f"   Valores únicos ({len(unique_vals)}): {unique_vals}")
-                
-                # Contar distribución
-                if len(unique_vals) <= 10:
-                    for val in unique_vals:
-                        count = np.sum(data == val)
-                        percentage = (count / data.size) * 100
-                        print(f"      Valor {val}: {count} píxeles ({percentage:.1f}%)")
-                
-                # Verificar si es binario correcto
-                if len(unique_vals) == 2 and 0 in unique_vals and 255 in unique_vals:
-                    print(f"   ✅ Halftone binario correcto")
-                else:
-                    print(f"   ⚠️ Problema: No es halftone binario puro")
-            
-        except Exception as e:
-            print(f"❌ Error en debug: {e}")
-    
+    def _write_specifications(self, path, settings, saved_files, positives):
+        """Hoja de especificaciones del trabajo para el taller."""
+        height_px, width_px = positives[0].shape
+        with open(path, 'w', encoding='utf-8') as f:
+            f.write("ESPECIFICACIONES DEL TRABAJO DE SERIGRAFÍA\n")
+            f.write("=" * 50 + "\n\n")
+            f.write(f"Fecha: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            if self.image_info:
+                f.write(f"Imagen: {os.path.basename(self.image_info.get('file_path', ''))}\n")
+            f.write("\nSALIDA\n")
+            f.write(f"  Papel: {settings.paper_width_mm:g} × {settings.paper_height_mm:g} mm\n")
+            f.write(f"  Positivo: {width_px} × {height_px} px = "
+                    f"{width_px / settings.dpi * 25.4:.1f} × {height_px / settings.dpi * 25.4:.1f} mm\n")
+            f.write(f"  Resolución: {settings.dpi} DPI\n")
+            f.write(f"  Ajustar al papel: {'sí' if settings.fit_to_paper else 'no'}\n")
+            f.write(f"  Guías de registro: {'sí' if settings.registration_guides else 'no'}\n")
+            f.write("\nTRAMA\n")
+            f.write(f"  Lineatura: {settings.lpi:g} LPI (celda {settings.cell_px:.2f} px)\n")
+            f.write(f"  Forma de punto: {self.shape_combo.currentText()}\n")
+            f.write("\nSEPARACIÓN\n")
+            f.write(f"  GCR: {settings.gcr:g}   Límite de tinta total: {settings.ink_limit:g} %\n")
+            if settings.white_base:
+                f.write(f"  Base blanca proporcional, choke {settings.white_base_choke_px} px\n")
+            f.write(f"  Color de prenda: {self.garment_color.name()}\n")
+            f.write("\nORDEN DE IMPRESIÓN\n")
+            for i, channel in enumerate(settings.channels(), 1):
+                f.write(f"  {i}. {CHANNEL_NAMES.get(channel, channel)}: ángulo "
+                        f"{settings.angles.get(channel, 0):g}°, umbral {settings.thresholds.get(channel, 128)}\n")
+            f.write("\nARCHIVOS\n")
+            for name in saved_files:
+                f.write(f"  {name}\n")
+
     def reset_channel_color(self):
         """
         Reset específico de colores - SINCRONIZADO con valores puros.
@@ -3507,8 +2538,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.update_single_color_button(canal, color)
             
             # Redibuja la vista previa
-            if hasattr(self, 'show_channel'):
-                self.show_channel(canal)
             self.update_preview()
 
             print(f"✅ Color del canal {canal} restablecido a PURO: {color.name()}")
@@ -3674,84 +2703,33 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
     def process_cmyk(self):
         """
-        Motor principal para la separación de colores y generación de semitonos.
-        Esta versión incluye control de Generación de Negro (Black Generation)
-        para evitar negros sobresaturados y mejorar el detalle en sombras.
+        Separa y trama la vista previa. Trabaja a resolución reducida (misma
+        cantidad de puntos por imagen) para responder rápido; la exportación
+        vuelve a calcular todo a resolución completa.
         """
         if self.image is None:
             return
 
-        QtWidgets.QApplication.processEvents()
-
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
-            resolution_settings = self.get_current_resolution_settings()
-            working_image = enhance_image_resolution(self.image, **resolution_settings)
-
-            # La trama se genera a la resolución final del positivo. Si se tramara
-            # a la resolución de la foto y luego se reescalara, el LPI real
-            # dependería de la foto y los puntos se deformarían.
-            alpha = getattr(self, 'image_alpha', None)
-            if alpha is not None:
-                alpha = cv2.resize(alpha, (working_image.shape[1], working_image.shape[0]),
-                                   interpolation=cv2.INTER_LINEAR)
-
-            if self.fit_format_cb.isChecked():
-                if alpha is None:
-                    # Imagen opaca: solo el margen agregado queda sin base
-                    alpha = np.full(working_image.shape[:2], 255, dtype=np.uint8)
-                print_format = self.get_current_print_format()
-                working_image = resize_to_print_format(
-                    working_image, print_format, print_format["dpi_recommended"])
-                if alpha is not None:
-                    # El margen agregado al centrar es transparente: sin base
-                    alpha = resize_to_print_format(
-                        alpha, print_format, print_format["dpi_recommended"], background=0)
-
-            rgb = cv2.cvtColor(working_image, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-
-            # --- Separación con GCR y límite de tinta total ---
-            # La fórmula (1-R-K)/(1-K) con K reducido deja C=M=Y=100% en el negro
-            # puro (390% de tinta). Aquí el gris común se RESTA de C, M, Y.
-            cmy = 1.0 - rgb
-            K = cmy.min(axis=2) * GCR_AMOUNT
-            cmy -= K[..., np.newaxis]
-
-            # Donde C+M+Y+K supera el límite, se reduce C, M, Y proporcionalmente
-            ink_limit = TOTAL_INK_LIMIT / 100.0
-            cmy_sum = cmy.sum(axis=2)
-            reduction = np.clip((ink_limit - K) / np.maximum(cmy_sum, 1e-6), 0.0, 1.0)
-            cmy *= reduction[..., np.newaxis]
-            C, M, Y = cmy[..., 0], cmy[..., 1], cmy[..., 2]
-
-            # 5. Se guardan los canales finales.
-            self.channel_arrays = {
-                'C': (np.clip(C, 0, 1) * 255).astype(np.uint8),
-                'M': (np.clip(M, 0, 1) * 255).astype(np.uint8),
-                'Y': (np.clip(Y, 0, 1) * 255).astype(np.uint8),
-                'K': (np.clip(K, 0, 1) * 255).astype(np.uint8)
-            }
-            
-            if self.white_base_cb.isChecked():
-                self.channel_arrays['W'] = generate_white_base(
-                    working_image,
-                    WHITE_BASE_SETTINGS["opacity_threshold"],
-                    WHITE_BASE_SETTINGS["choke_pixels"],
-                    alpha)
-
-            # --- Generación de Semitonos ---
-            scale, shape, angles = self._get_halftone_params()
-            self.preview_cache = {}
-            for channel_name, channel_data in self.channel_arrays.items():
-                angle = angles.get(channel_name, 0)
-                self.preview_cache[channel_name] = self._generate_halftone_pattern(channel_data, scale, shape, angle)
-            
-            # --- Actualización Final de la UI ---
+            settings = self.job_settings()
+            self.channel_arrays, self.preview_cache, self.preview_scale = render(
+                self.image, self.image_alpha, settings, preview=True)
             self.update_preview()
 
+            paper_note = ""
+            if needs_paper_fit(self.image.shape, settings):
+                paper_note = f" en {settings.paper_width_mm:g}×{settings.paper_height_mm:g} mm"
+            self.status_bar.showMessage(
+                f"Separado{paper_note}: {settings.lpi:g} LPI a {settings.dpi} DPI. "
+                f"Vista previa al {self.preview_scale:.0%}; la exportación usa resolución completa.")
         except Exception as e:
-            print(f"❌ Error durante el ajuste: {e}")
+            print(f"❌ Error durante la separación: {e}")
             import traceback
             traceback.print_exc()
+            QtWidgets.QMessageBox.critical(self, "No se pudo separar", str(e))
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
     
     def apply_calculated_lpi(self, dialog):
         """Aplicar LPI calculado a la configuración actual"""

@@ -1,0 +1,87 @@
+"""
+Configuración completa de un trabajo de separación.
+
+El motor (separation, screening, output) solo recibe un JobSettings; no lee la
+interfaz. Así el mismo trabajo se puede repetir, guardar en JSON, procesar en
+lote o servir desde otra interfaz.
+"""
+
+import json
+from dataclasses import asdict, dataclass, field, fields
+
+from ..utils.constants import (
+    CMYK_ANGLES, GCR_AMOUNT, REGISTRATION_GUIDE_SETTINGS, TOTAL_INK_LIMIT,
+    WHITE_BASE_SETTINGS,
+)
+
+PROCESS_CHANNELS = ('C', 'M', 'Y', 'K')
+NEUTRAL_THRESHOLD = 128
+
+
+@dataclass
+class JobSettings:
+    # Trama
+    lpi: float = 45.0
+    dot_shape: str = 'circle'            # circle | ellipse | diamond | line
+    angles: dict = field(default_factory=lambda: dict(CMYK_ANGLES))
+
+    # Salida
+    dpi: int = 300
+    paper_width_mm: float = 210.0
+    paper_height_mm: float = 297.0
+    fit_to_paper: bool = False
+    registration_guides: bool = False
+    guide_margin_mm: float = REGISTRATION_GUIDE_SETTINGS['margin_mm']
+    guide_cross_mm: float = REGISTRATION_GUIDE_SETTINGS['cross_size_mm']
+
+    # Separación
+    gcr: float = GCR_AMOUNT
+    ink_limit: float = TOTAL_INK_LIMIT   # %
+    resolution_factor: float = 1.0
+    resolution_method: str = 'INTER_CUBIC'
+
+    # Base blanca
+    white_base: bool = False
+    white_base_threshold: int = WHITE_BASE_SETTINGS['opacity_threshold']
+    white_base_choke_px: int = WHITE_BASE_SETTINGS['choke_pixels']
+
+    # Canales: umbral 128 = sin ajuste; menor = más tinta
+    thresholds: dict = field(default_factory=lambda: {c: NEUTRAL_THRESHOLD for c in 'CMYKW'})
+    channel_order: list = field(default_factory=lambda: ['W', 'Y', 'C', 'M', 'K'])
+
+    @property
+    def cell_px(self):
+        """Tamaño de la celda de trama en píxeles del positivo."""
+        return self.dpi / self.lpi
+
+    @property
+    def paper_px(self):
+        """Tamaño del papel en píxeles al DPI de salida (ancho, alto)."""
+        return (int(self.paper_width_mm / 25.4 * self.dpi),
+                int(self.paper_height_mm / 25.4 * self.dpi))
+
+    def channels(self):
+        """Canales que se generan, en orden de impresión."""
+        active = set(PROCESS_CHANNELS) | ({'W'} if self.white_base else set())
+        return [c for c in self.channel_order if c in active]
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data):
+        known = {f.name for f in fields(cls)}
+        settings = cls(**{k: v for k, v in data.items() if k in known})
+        # Rellenar canales que falten en archivos antiguos
+        settings.angles = {**CMYK_ANGLES, **settings.angles}
+        settings.thresholds = {**{c: NEUTRAL_THRESHOLD for c in 'CMYKW'}, **settings.thresholds}
+        return settings
+
+    def save(self, path):
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+
+    @classmethod
+    def load(cls, path):
+        with open(path, encoding='utf-8') as f:
+            return cls.from_dict(json.load(f))

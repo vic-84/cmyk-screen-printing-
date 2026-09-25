@@ -141,12 +141,28 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
   Usa la configuración guardada por la app. Por cada archivo genera una carpeta con positivos, PDF, configuración y `resumen.json` (tamaño, tinta total, puntos que se pierden, tiempo). Si la técnica es plano o índice sin paleta, detecta los colores de cada imagen (`--colores N`). Un archivo con error no detiene el lote.
 - Pruebas: 51.
 
-### Fase 8: Versión web
-- Reutiliza el motor de la fase 1 detrás de una API. Interfaz web aparte.
+### Fase 8: Versión web *(hecha)*
+- API con FastAPI sobre el mismo motor (`src/web/app.py`):
+  - `/api/upload` sube la imagen una vez y la guarda en memoria con un id
+  - `/api/preview` devuelve la simulación o las vistas de control de calidad, el reporte y el aviso de resolución
+  - `/api/export` genera un zip con positivos, PDF y configuración
+  - `/api/palette` detecta colores; `/api/match` los iguala con una biblioteca ASE/CSV
+  - `/api/mesh` evalúa malla/LPI y sugiere lineatura
+- Interfaz web (`src/web/static/index.html`, sin dependencias externas, funciona sin internet):
+  - mismos controles y sistema visual que la app de escritorio
+  - arrastrar y soltar, vista previa automática al cambiar parámetros
+  - pantallas en orden de impresión (clic = ver hasta esa pasada) y "Tamaño real" para revisar la trama
+  - adaptable a celular
+- Arranque: `pip install -r requirements-web.txt` y `python -m src.web`, luego abrir http://127.0.0.1:8000. Para usarla desde otros equipos del taller: `python -m src.web --host 0.0.0.0`.
+- Verificada en Chromium: carga, CMYK sobre algodón negro, color plano y descarga del zip, sin errores en consola.
+- Pruebas: 56 (5 de la API web).
 
 ---
 
-## Requisitos de sistema (actual)
+## Requisitos de sistema
 - Python 3.10+, Windows, macOS o Linux.
-- `pip install -r requirements.txt`
-- Separación A3 a 300 dpi: unos 14 s y 1.8 GB de RAM. La vista previa a baja resolución (fase 1) debe bajar esto a menos de 1 s por ajuste.
+- Escritorio: `pip install -r requirements.txt` y `python main.py`.
+- Web (opcional): `pip install -r requirements-web.txt` y `python -m src.web`.
+- EPS: Ghostscript instalado.
+- Lotes: `python -m src.cli trabajo.json imagenes/ -o salida/`.
+- Rendimiento medido (A3, 300 dpi): vista previa ~1–1.5 s, cambio de tono o umbral ~0.3–0.9 s, exportación de 5 positivos ~12 s. A 600 dpi o más, la separación y la trama se procesan por franjas para caber en memoria.

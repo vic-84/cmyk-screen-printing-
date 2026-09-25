@@ -64,7 +64,7 @@ class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
     def __init__(self, color_for_channel, angle_for_channel=None, parent=None, name_for_channel=None,
                  density_for_channel=None, own_tone_for_channel=None):
         super().__init__(parent)
-        self._own_tone_for_channel = own_tone_for_channel or (lambda ch: False)
+        self._own_tone_for_channel = own_tone_for_channel or (lambda ch: "")
         self._density_for_channel = density_for_channel or (lambda ch: 100.0)
         self._color_for_channel = color_for_channel
         self._name_for_channel = name_for_channel or (lambda ch: CHANNEL_NAMES.get(ch, ch))
@@ -104,11 +104,11 @@ class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
             painter.drawText(text_rect, QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight, f"{angle:g}°")
         # Densidad cambiada: se avisa en la lista (una tinta al 0 % no se imprime)
         density = self._density_for_channel(channel)
-        own_tone = self._own_tone_for_channel(channel)
-        if own_tone and density == 100:
+        marks = self._own_tone_for_channel(channel)
+        if marks and density == 100:
             painter.setPen(QtGui.QColor(theme.EMULSION))
             painter.drawText(text_rect.adjusted(0, 0, -52, 0), QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight,
-                             "tono propio")
+                             marks)
         if density != 100:
             painter.setPen(QtGui.QColor(theme.ESTADO_RIESGO if density == 0 else theme.ESTADO_ALERTA))
             painter.drawText(text_rect.adjusted(0, 0, -52, 0), QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight,
@@ -1087,7 +1087,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 self.channel_list,
                 self.channel_display_name,
                 lambda ch: self.density_spins[ch].value() if ch in self.density_spins else 100.0,
-                lambda ch: ch in self.current_channel_tone()))
+                self.channel_adjust_marks))
         self.channel_list.orderChanged.connect(self.set_channel_order)
         self.channel_list.itemSelectionChanged.connect(self.on_channel_selection_changed)
         self.channel_list.setFixedHeight(ChannelScreenDelegate.ROW_HEIGHT * 5 + 4)
@@ -1111,6 +1111,40 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.threshold_slider.sliderMoved.connect(self.on_threshold_slider_changed)
         self.threshold_slider.sliderReleased.connect(self._delayed_threshold_update)
         channels_tab_layout.addWidget(self.threshold_slider)
+
+        # Curva de color del positivo seleccionado: sube o baja la tinta en
+        # luces, medios y sombras sin mover el umbral
+        self.curve_box = QtWidgets.QWidget()
+        curve_grid = QtWidgets.QGridLayout(self.curve_box)
+        curve_grid.setContentsMargins(0, 4, 0, 0)
+        curve_grid.setHorizontalSpacing(8)
+        curve_grid.setVerticalSpacing(2)
+        self.curve_title = field_label("Curva de color")
+        curve_grid.addWidget(self.curve_title, 0, 0, 1, 2)
+        reset_curve_btn = QtWidgets.QPushButton("Restablecer")
+        reset_curve_btn.setToolTip("Deja la curva de este canal sin cambios")
+        reset_curve_btn.clicked.connect(self.reset_channel_curve)
+        curve_grid.addWidget(reset_curve_btn, 0, 2)
+        self.channel_color_curves = {}
+        self.curve_sliders, self.curve_value_labels = [], []
+        for row, (name, tip) in enumerate((("Luces", "Tonos claros (25 %)"), ("Medios", "Tonos medios (50 %)"),
+                                           ("Sombras", "Tonos oscuros (75 %)")), 1):
+            curve_grid.addWidget(field_label(name), row, 0)
+            slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+            slider.setRange(-30, 30)
+            slider.setToolTip(f"{tip}: + más tinta de este color, − menos tinta")
+            slider.valueChanged.connect(self.on_channel_curve_changed)
+            curve_grid.addWidget(slider, row, 1)
+            value_label = secondary_label("0")
+            value_label.setWordWrap(False)
+            value_label.setMinimumWidth(34)
+            value_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+            curve_grid.addWidget(value_label, row, 2)
+            self.curve_sliders.append(slider)
+            self.curve_value_labels.append(value_label)
+        curve_grid.setColumnStretch(1, 1)
+        self.curve_box.setEnabled(False)
+        channels_tab_layout.addWidget(self.curve_box)
 
         channels_tabs.addTab(channels_tab, "Orden y umbral")
 
@@ -2238,6 +2272,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             dot_gain=self.dot_gain_spin.value(),
             dot_gain_curve=[list(point) for point in self.dot_gain_curve],
             channel_tone=self.current_channel_tone(),
+            channel_curve={ch: list(v) for ch, v in self.channel_color_curves.items() if any(v)},
             dpi=int(self.output_dpi_combo.currentData() or print_format["dpi_recommended"]),
             output_format=self.output_format_combo.currentData(),
             mirror=self.mirror_cb.isChecked(),
@@ -2307,6 +2342,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.max_dot_spin.setValue(settings.max_dot)
         self.dot_gain_spin.setValue(settings.dot_gain)
         self.set_gain_curve(settings.dot_gain_curve)
+        self.channel_color_curves = {ch: list(v) for ch, v in settings.channel_curve.items()}
         for ch, spins in self.channel_tone_spins.items():
             own = settings.channel_tone.get(ch, {})
             for key, spin in spins.items():
@@ -2559,6 +2595,36 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
 
         
+    def show_channel_curve(self, channel):
+        """Pone en los deslizadores la curva de color del canal seleccionado."""
+        self.curve_box.setEnabled(channel is not None)
+        shifts = self.channel_color_curves.get(channel, [0, 0, 0]) if channel else [0, 0, 0]
+        self.curve_title.setText(f"Curva de {self.channel_display_name(channel).lower()}" if channel
+                                 else "Curva de color")
+        for slider, label, value in zip(self.curve_sliders, self.curve_value_labels, shifts):
+            slider.blockSignals(True)
+            slider.setValue(int(value))
+            slider.blockSignals(False)
+            label.setText(f"{value:+d}" if value else "0")
+
+    def on_channel_curve_changed(self, *_):
+        channel = self.current_channel
+        if not channel:
+            return
+        shifts = [slider.value() for slider in self.curve_sliders]
+        self.channel_color_curves[channel] = shifts
+        for label, value in zip(self.curve_value_labels, shifts):
+            label.setText(f"{value:+d}" if value else "0")
+        self.channel_list.viewport().update()
+        self.threshold_timer.start(100)       # retrama este canal al soltar
+
+    def reset_channel_curve(self):
+        if self.current_channel:
+            self.channel_color_curves.pop(self.current_channel, None)
+            self.show_channel_curve(self.current_channel)
+            self.channel_list.viewport().update()
+            self.threshold_timer.start(0)
+
     def on_channel_selection_changed(self):
         """
         Maneja la selección en la lista de canales. Activa el slider si se
@@ -2579,10 +2645,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.threshold_slider.blockSignals(False)
             self.threshold_label.setText(f"Umbral de {CHANNEL_NAMES.get(self.current_channel, self.current_channel).lower()}")
             self.threshold_value_label.setText(f"{current_threshold} / 255")
+            self.show_channel_curve(self.current_channel)
         else:
             self.current_channel = None
             self.threshold_label.setText("Umbral")
             self.threshold_value_label.setText("Selecciona un canal")
+            self.show_channel_curve(None)
             # Si no hay un solo canal seleccionado, forzamos la vista de composición
             self.view_individual_channel_cb.setChecked(False)
             
@@ -2649,6 +2717,15 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             if own:
                 tone[ch] = own
         return tone
+
+    def channel_adjust_marks(self, channel):
+        """Texto para la lista de canales: qué ajustes propios lleva el positivo."""
+        marks = []
+        if any(self.channel_color_curves.get(channel, [])):
+            marks.append("curva")
+        if channel in self.current_channel_tone():
+            marks.append("tono propio")
+        return ", ".join(marks)
 
     def on_channel_tone_changed(self, *_):
         self.channel_list.viewport().update()
@@ -2855,6 +2932,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 gain = (f"curva de {len(tone['dot_gain_curve'])} puntos" if tone['dot_gain_curve']
                         else f"ganancia {tone['dot_gain']:g} %")
                 own = " (propios)" if channel in settings.channel_tone else ""
+                curve = settings.channel_curve.get(channel)
+                if curve and any(curve):
+                    own += f", curva luces {curve[0]:+d} medios {curve[1]:+d} sombras {curve[2]:+d}"
                 f.write(f"  {i}. {settings.channel_name(channel)}: ángulo "
                         f"{settings.channel_angle(channel):g}°, umbral {settings.thresholds.get(channel, 128)}, "
                         f"densidad {settings.density.get(channel, 100):g} %, punto {tone['min_dot']:g}–"

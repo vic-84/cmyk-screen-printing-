@@ -251,3 +251,4 @@ Algunas marcas exigen separar con su perfil ICC. `src/core/icc.py`, sobre Little
 - Lo que queda en «General» usa los valores del grupo Tono.
 - Se guarda en `JobSettings.channel_tone` y `tone_for(canal)` resuelve los valores. Lo usan la trama, la simulación, el control de calidad y el CLI, que lee el JSON.
 - La lista de canales marca «tono propio» y las especificaciones anotan el tono de cada película.
+- **Curva de color por positivo**: al seleccionar un canal aparecen Luces (25 %), Medios (50 %) y Sombras (75 %), de −30 a +30 puntos. Suben o bajan la tinta de ese color sin mover el umbral. La curva nunca invierte el tono y queda antes de la compensación de ganancia (`JobSettings.channel_curve`, `tone.color_curve`).

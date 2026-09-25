@@ -2,7 +2,8 @@
 Curva de tono por canal, aplicada al canal continuo antes de tramar
 (mínimo, máximo y ganancia: los del canal si los tiene, si no los generales):
 
-  densidad → umbral → compensación de ganancia de punto → rango tonal
+  umbral → densidad → curva de color (luces, medios, sombras) →
+  compensación de ganancia de punto → rango tonal
 
 Todos los valores son cantidad de tinta (0 = sin tinta, 255 = 100 %).
 """
@@ -76,11 +77,29 @@ class GainModel:
         return film_for_printed(printed, self.gain_at_50) if self.gain_at_50 > 0 else np.asarray(printed, dtype=np.float64)
 
 
-def tone_lut(density=100.0, gain=None, min_dot=0.0, max_dot=100.0):
+CURVE_POINTS = (0.25, 0.50, 0.75)   # luces, medios, sombras
+
+
+def color_curve(values, shifts):
     """
-    Tabla de 256 valores con densidad, compensación de ganancia y rango tonal.
+    Curva de color de un positivo: sube o baja la tinta en luces, medios y
+    sombras (en puntos de %), sin tocar el 0 ni el 100 %. Se mantiene
+    monótona: más tinta en el original nunca da menos tinta en la película.
+    """
+    if not shifts or not any(shifts):
+        return values
+    targets = [min(max(point + shift / 100.0, 0.0), 1.0) for point, shift in zip(CURVE_POINTS, shifts)]
+    xs = np.array([0.0, *CURVE_POINTS, 1.0])
+    ys = np.maximum.accumulate(np.array([0.0, *targets, 1.0]))
+    return np.interp(values, xs, ys)
+
+
+def tone_lut(density=100.0, gain=None, min_dot=0.0, max_dot=100.0, curve=None):
+    """
+    Tabla de 256 valores con densidad, curva de color, compensación de ganancia y rango tonal.
 
     density: % de la tinta del canal (100 = sin cambio).
+    curve: (luces, medios, sombras) en puntos de %, ver color_curve.
     gain: GainModel o ganancia al 50 % en puntos.
     min_dot / max_dot: en %. Por debajo del mínimo el punto no se sostiene en
     la malla y se elimina; por encima del máximo los puntos se cierran por la
@@ -89,6 +108,7 @@ def tone_lut(density=100.0, gain=None, min_dot=0.0, max_dot=100.0):
     model = gain if isinstance(gain, GainModel) else GainModel(gain or 0.0)
     values = np.arange(256) / 255.0
     values = np.clip(values * density / 100.0, 0.0, 1.0)
+    values = color_curve(values, curve)
     if model.active:
         values = model.film(values)
     low, high = min_dot / 100.0, max_dot / 100.0
@@ -102,7 +122,7 @@ def apply_tone(channel, name, settings):
     adjusted = adjust_levels(channel, settings.thresholds.get(name, 128))
     tone = settings.tone_for(name)
     lut = tone_lut(settings.density.get(name, 100.0), GainModel.from_settings(settings, name),
-                   tone['min_dot'], tone['max_dot'])
+                   tone['min_dot'], tone['max_dot'], settings.channel_curve.get(name))
     return lut[adjusted]
 
 

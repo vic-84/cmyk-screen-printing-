@@ -886,6 +886,40 @@ class CoreTests(unittest.TestCase):
         window.close()
         other.close()
 
+    def test_color_curve_moves_lights_mids_and_shadows_separately(self):
+        from src.core.tone import color_curve, apply_tone
+        values = np.array([0.0, 0.25, 0.5, 0.75, 1.0])
+        np.testing.assert_allclose(color_curve(values, [10, 0, -10]), [0.0, 0.35, 0.5, 0.65, 1.0])
+        # Nunca invierte el tono aunque los ajustes se crucen
+        crossed = color_curve(np.linspace(0, 1, 101), [30, -30, 0])
+        self.assertTrue((np.diff(crossed) >= 0).all())
+        ramp = np.tile(np.arange(256, dtype=np.uint8), (2, 1))
+        settings = JobSettings(channel_curve={"C": [0, 10, 0]})
+        plain = JobSettings()
+        self.assertGreater(int(apply_tone(ramp, "C", settings)[0][128]), int(apply_tone(ramp, "C", plain)[0][128]))
+        np.testing.assert_array_equal(apply_tone(ramp, "M", settings), apply_tone(ramp, "M", plain))
+
+    def test_channel_curve_sliders_follow_the_selected_channel(self):
+        window = SimpleHalftoneApp()
+        window._set_loaded_image(np.full((40, 40, 3), 150, dtype=np.uint8))
+        window.white_base_cb.setChecked(False)
+        window.process_cmyk()
+        items = {window.channel_list.item(i).text(): window.channel_list.item(i)
+                 for i in range(window.channel_list.count())}
+        window.channel_list.setCurrentItem(items["C"])
+        window.curve_sliders[1].setValue(12)
+        window.channel_list.setCurrentItem(items["Y"])
+        self.assertEqual([s.value() for s in window.curve_sliders], [0, 0, 0])
+        window.curve_sliders[0].setValue(-8)
+        settings = window.job_settings()
+        self.assertEqual(settings.channel_curve, {"C": [0, 12, 0], "Y": [-8, 0, 0]})
+        self.assertEqual(window.channel_adjust_marks("C"), "curva")
+        other = SimpleHalftoneApp()
+        other.apply_job_settings(JobSettings.from_dict(json.loads(json.dumps(settings.to_dict()))))
+        self.assertEqual(other.job_settings().channel_curve, settings.channel_curve)
+        window.close()
+        other.close()
+
     def test_gray_base_is_named_and_simulated_with_its_color(self):
         red = [220, 30, 30]
         spots = [{"id": "S1", "name": "Rojo", "rgb": red, "halftone": False, "opaque": False, "base": True}]

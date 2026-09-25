@@ -42,6 +42,9 @@ class JobSettings:
     # distinto: la base de plastisol crece más que un cian de proceso).
     # {'W': {'min_dot': 15, 'max_dot': 85, 'dot_gain': 30, 'dot_gain_curve': [[50, 80]]}}
     channel_tone: dict = field(default_factory=dict)
+    # Curva de color de cada positivo: puntos que se suben (+) o bajan (−) en
+    # luces (25 %), medios (50 %) y sombras (75 %). {'C': [0, 5, -3]}
+    channel_curve: dict = field(default_factory=dict)
 
     # Salida
     dpi: int = 300

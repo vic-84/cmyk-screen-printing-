@@ -970,6 +970,18 @@ class CoreTests(unittest.TestCase):
         boost = render(image, None, JobSettings(garment_as_black=True, garment_black_boost=50, **base))[0]
         self.assertGreater(col(boost["W"], 2), levels[2])
 
+    def test_garment_as_black_keeps_the_color_of_cool_grays(self):
+        # Gris azulado medio: con 5 marcos su cian se va al negro; sin negro debe quedar en C
+        image = np.zeros((40, 40, 3), dtype=np.uint8)
+        image[:] = (150, 120, 105)          # BGR: azul 150, rojo 105
+        settings = JobSettings(mode="cmyk", white_base=True, garment_as_black=True, min_dot=10, lpi=20)
+        channels = render(image, None, settings)[0]
+        from src.core.tone import apply_tone
+        cyan = apply_tone(channels["C"], "C", settings)
+        self.assertGreater(channels["C"][20, 20] / 2.55, 25)      # ~30 % de cian (1 − 105/150)
+        self.assertGreater(cyan[20, 20], 0)                        # sobrevive al punto mínimo
+        self.assertGreater(channels["W"][20, 20], 0)
+
     def test_garment_as_black_only_applies_to_cmyk_with_base(self):
         self.assertFalse(JobSettings(garment_as_black=True, white_base=False).uses_garment_as_black)
         self.assertFalse(JobSettings(garment_as_black=True, white_base=True, mode="cmyk_spot").uses_garment_as_black)

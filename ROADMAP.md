@@ -260,6 +260,6 @@ Algunas marcas exigen separar con su perfil ICC. `src/core/icc.py`, sobre Little
 - Controles:
   - *Sin base bajo* (12 % de luz): más bajo da más detalle en las sombras.
   - *Refuerzo de grises* (0 %): aclara los medios.
-- C, M y Y se recortan donde no queda base.
-- Prueba con la catrina: ΔE 11.6 contra 12.9 del normal de 5 marcos, conservando el detalle del cabello. **Pendiente: prueba en prenda real** con los kits A (5 marcos), B (base por luz) y C (refuerzo 25 %).
+- C, M y Y llevan **solo el color** de cada punto (rgb / máximo): la base da la luz y el CMY tiñe. Con la separación normal, el color de los grises fríos se iba al negro y el punto mínimo lo borraba; el cian quedaba vacío. Donde no hay base se quita el color, pero sin atenuarlo donde sí la hay.
+- Prueba con la catrina: ΔE 10.4 contra 12.9 del normal de 5 marcos. Conserva el cabello y el cian recupera el fondo azulado. En A, el 88 % del cian iba a oscurecer sombras que ahora pone la tela, por eso su película es ligera. **Pendiente: prueba en prenda real** con los kits A (5 marcos), B (base por luz) y C (refuerzo 25 %).
 - El PDF de películas ahora se guarda en 1 bit, sin pérdida: pasó de 22.6 a 2.7 MB en A3.

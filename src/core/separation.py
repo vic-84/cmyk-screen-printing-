@@ -210,9 +210,19 @@ def garment_as_black(channels, bgr, alpha, settings, scale=1.0):
     if choke > 0:
         base = cv2.erode(base, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (choke * 2 + 1, choke * 2 + 1)))
     channels['W'] = base
-    cover = np.clip(base.astype(np.float32) / 255.0 * 1.5, 0.0, 1.0)
-    for name in 'CMY':
-        channels[name] = np.round(channels[name] * cover).astype(np.uint8)
+    # La base da la luz; C, M y Y solo el color: el tono de cada punto a plena
+    # luz (rgb / máximo). Un gris azulado lleva base según su luz y un poco de
+    # cian que la tiñe. Con la separación normal ese cian se iba al negro y el
+    # punto mínimo lo borraba.
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    brightest = np.maximum(rgb.max(axis=2, keepdims=True), 1e-3)
+    color = 1.0 - rgb / brightest
+    # Sin base no se ve el color: se quita, pero no se atenúa donde sí hay base
+    gate = np.clip((base.astype(np.float32) / 255.0 - 0.02) / 0.08, 0.0, 1.0)
+    if alpha is not None:
+        gate *= alpha.astype(np.float32) / 255.0
+    for i, name in enumerate('CMY'):
+        channels[name] = np.round(np.clip(color[..., i], 0.0, 1.0) * gate * 255).astype(np.uint8)
 
 
 def preview_scale(prepared_shape, settings):

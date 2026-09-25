@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from src.core.image_processing import generate_white_base, prepare_image_for_processing, rotate_image
 from src.core import mesh as mesh_rules
 from src.core import color, output, tone
+from src.core import simulate as sim
 from src.core.job import JobSettings
 from src.core.screening import adjust_levels, halftone
 from src.core.separation import render
@@ -397,6 +398,77 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(settings.channels()[0], "W")
         self.assertEqual(set(window.preview_cache), {"W", "S1", "S2"})
         self.assertEqual(window.channel_list.count(), 3)
+        window.close()
+
+    def test_holdable_dot_range_depends_on_mesh_and_lpi(self):
+        low, high = sim.holdable_range(120, 29)
+        self.assertAlmostEqual(low, 10.3, delta=0.2)
+        self.assertAlmostEqual(high, 100 - low)
+        self.assertGreater(sim.holdable_range(120, 45)[0], low)   # malla más abierta, punto mínimo mayor
+
+    def _flat_job(self, rgb_ink, opaque=None, **extra):
+        settings = JobSettings(mode="spot", garment_rgb=[0, 0, 0],
+                               spot_colors=[{"id": "S1", "name": "Tinta", "rgb": rgb_ink, "halftone": False,
+                                             "opaque": bool(opaque), "base": True}], **extra)
+        image = np.zeros((40, 40, 3), dtype=np.uint8)
+        image[:] = rgb_ink[::-1]
+        channels, screens, _ = render(image, None, settings)
+        return settings, channels, screens
+
+    def test_transparent_ink_disappears_on_black_and_opaque_covers(self):
+        red = [220, 30, 30]
+        settings, channels, screens = self._flat_job(red, opaque=False)
+        transparent = sim.simulate(channels, screens, settings, {"S1": red}, [0, 0, 0])
+        settings, channels, screens = self._flat_job(red, opaque=True)
+        opaque = sim.simulate(channels, screens, settings, {"S1": red}, [0, 0, 0])
+        self.assertLess(transparent.mean(), 10)
+        self.assertGreater(opaque[..., 0].mean(), 150)
+
+    def test_registration_test_reveals_the_underbase(self):
+        red = [220, 30, 30]
+        settings, channels, screens = self._flat_job(red, opaque=True, white_base=True, white_base_choke_px=0)
+        # Área de tinta rodeada de prenda
+        for name in screens:
+            screens[name][:, :] = 255
+            screens[name][10:30, 10:30] = 0
+        colors = {"S1": red, "W": (255, 255, 255)}
+        aligned = sim.simulate(channels, screens, settings, colors, [0, 0, 0])
+        shifted = sim.simulate(channels, screens, settings, colors, [0, 0, 0], misregister_mm=0.5)
+        white = lambda img: ((img > 240).all(axis=-1)).sum()
+        self.assertEqual(white(aligned), 0)
+        self.assertGreater(white(shifted), 0)
+
+    def test_print_steps_show_passes_in_order(self):
+        settings, channels, screens = self._flat_job([220, 30, 30], opaque=True, white_base=True)
+        colors = {"S1": (220, 30, 30), "W": (255, 255, 255)}
+        only_base = sim.simulate(channels, screens, settings, colors, [0, 0, 0], steps=1)
+        garment = sim.simulate(channels, screens, settings, colors, [0, 0, 0], steps=0)
+        self.assertGreater(only_base.mean(), 200)
+        self.assertEqual(garment.max(), 0)
+
+    def test_quality_report_flags_ink_limit_and_lost_dots(self):
+        settings = JobSettings(ink_limit=150, gcr=0.0, mesh_tpi=120, lpi=45)
+        image = np.zeros((20, 20, 3), dtype=np.uint8)
+        image[:, :10] = (30, 30, 30)       # casi negro: mucha tinta
+        image[:, 10:] = (245, 245, 245)    # luces muy claras: puntos pequeños
+        channels, _, _ = render(image, None, settings)
+        report = sim.quality_report(channels, settings)
+        self.assertLessEqual(report["tac_max"], 151)
+        self.assertGreater(report["lost"], 0.3)
+        overlay = sim.dot_risk_overlay(np.zeros((20, 20, 3), np.uint8), channels, settings)
+        self.assertTrue((overlay[5, 15] == (235, 120, 20)).all())
+
+    def test_substrate_profile_and_view_modes_in_the_window(self):
+        window = SimpleHalftoneApp()
+        window._set_loaded_image(np.full((60, 40, 3), 120, dtype=np.uint8))
+        window.substrate_combo.setCurrentText("Algodón negro")
+        self.assertTrue(window.white_base_cb.isChecked())
+        self.assertEqual(window.ink_limit_spin.value(), 240)
+        window.process_cmyk()
+        for index in range(window.view_mode_combo.count()):
+            window.view_mode_combo.setCurrentIndex(index)
+        window.step_slider.setValue(1)
+        self.assertIn("Base blanca", window.step_label.text())
         window.close()
 
     def test_rotate_image_preserves_color_images(self):

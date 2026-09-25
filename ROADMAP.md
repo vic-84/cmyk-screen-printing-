@@ -106,11 +106,19 @@ Antes de implementar, cuatro puntos del texto de referencia que no conviene prog
 - **Bibliotecas de color**: importa ASE (RGB/CMYK/Lab/gris) y CSV. **Igualar** asigna a cada tinta la muestra más cercana por **ΔE2000**, verificado con los datos de referencia de Sharma 2005. Pantone no se incluye por licencia; se importa la que tengas exportada.
 - Pruebas: 35.
 
-### Fase 5: Simulación y control de calidad
-- Modelo de **opacidad de tinta** (plastisol, base agua, cubriente, transparente) sobre el color del sustrato.
-- **Perfiles de sustrato** (claro/oscuro, algodón, poliéster, papel) que activan base blanca, límite de tinta y rango tonal.
-- **Previsualización paso a paso** en el orden de impresión.
-- **Mapa de tinta total**, aviso de **puntos por debajo del mínimo** de la malla y **prueba virtual de calce** (desplazar cada canal ±0.x mm para ver dónde asoma la base).
+### Fase 5: Simulación y control de calidad *(hecha)*
+- Simulación en el motor (`src/core/simulate.py`), probada sin interfaz.
+- **Tipo de tinta** con su opacidad: plastisol de proceso, base agua, plastisol cubriente y transparente. Una tinta transparente sobre prenda negra casi desaparece; una cubriente tapa.
+- **Perfiles de sustrato**: algodón blanco, negro y de color, poliéster claro y papel. Cada uno fija color de prenda, base blanca, límite de tinta, rango tonal y ganancia.
+- **Límite de tinta total** editable en la interfaz.
+- **Vistas** de la simulación:
+  - **Impreso**, con **control pasada por pasada** en el orden de impresión
+  - **Tinta total**: ámbar cerca del límite, rojo por encima
+  - **Puntos en riesgo**: naranja para luces que la malla no sostiene, azul para sombras que se cierran
+  - **Prueba de calce**: corre cada tinta 0.05–2 mm en otra dirección para ver dónde asoma la base o la prenda
+- **Rango sostenible por la malla**: el punto mínimo es el que mide ~1.5 pasos de hilo de diámetro (malla 120 a 29 LPI → 10–90 %). El botón **Según malla** lo aplica al punto mínimo y máximo.
+- **Resumen de calidad** en la barra de estado al separar: tinta total máxima, área sobre el límite, % con puntos que se pierden o se cierran.
+- Pruebas: 41.
 
 ### Fase 6: Formatos de entrada
 - PSD (`psd-tools`), AI y PDF (PyMuPDF), EPS (Ghostscript).

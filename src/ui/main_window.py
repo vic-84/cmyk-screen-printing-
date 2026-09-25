@@ -37,9 +37,11 @@ from .pdf_selector import PDFPageSelector
 from . import theme
 from ..core.job import JobSettings
 from ..core.screening import halftone, screen_channel
-from ..core.separation import needs_paper_fit, render
+from ..core.separation import render
 from ..core import mesh as mesh_rules
 from ..core import output
+from ..core import simulate as sim
+from ..core.simulate import INK_TYPES, SUBSTRATE_PROFILES
 from ..core.color import detect_palette, lab_to_rgb, match_library, read_library, rgb_to_lab, write_ase
 from ..core.spot import default_needs_base, order_light_to_dark
 from ..core import tone as tone_rules
@@ -773,6 +775,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.dot_gain_spin = percent_spin(0, 45, "Cuánto crece un punto del 50 % al imprimir (mídelo con la plantilla). "
                                                   "La trama se compensa para que imprima el tono correcto")
         tone_layout.addWidget(self.dot_gain_spin, 2, 1)
+        self.hold_limits_btn = QtWidgets.QPushButton("Según malla")
+        self.hold_limits_btn.setToolTip("Punto mínimo y máximo que la malla puede sostener con esta lineatura")
+        self.hold_limits_btn.clicked.connect(self.apply_mesh_hold_limits)
+        tone_layout.addWidget(self.hold_limits_btn, 0, 2)
         self.gain_curve_btn = QtWidgets.QPushButton("Curva medida…")
         self.gain_curve_btn.setToolTip("Cargar los valores medidos con la plantilla de ganancia")
         self.gain_curve_btn.clicked.connect(self.edit_gain_curve)
@@ -780,6 +786,34 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.tone_hint = secondary_label("Referencia textil: punto mínimo 5–10 %, máximo 85–95 %, ganancia 15–30 %.")
         tone_layout.addWidget(self.tone_hint, 3, 0, 1, 3)
         controls_layout.addWidget(tone_group)
+
+        # === SUSTRATO ===
+        substrate_group = QtWidgets.QGroupBox("Sustrato y tinta")
+        substrate_layout = QtWidgets.QGridLayout(substrate_group)
+        substrate_layout.setHorizontalSpacing(10)
+        substrate_layout.setVerticalSpacing(6)
+        substrate_layout.setColumnStretch(1, 1)
+        substrate_layout.addWidget(field_label("Sustrato"), 0, 0)
+        self.substrate_combo = compact_combo(QtWidgets.QComboBox())
+        self.substrate_combo.addItems(["Personalizado"] + list(SUBSTRATE_PROFILES.keys()))
+        self.substrate_combo.setToolTip("Aplica color de prenda, base blanca, límite de tinta, rango tonal y ganancia típicos")
+        self.substrate_combo.currentTextChanged.connect(self.apply_substrate_profile)
+        substrate_layout.addWidget(self.substrate_combo, 0, 1)
+        substrate_layout.addWidget(field_label("Tinta"), 1, 0)
+        self.ink_type_combo = compact_combo(QtWidgets.QComboBox())
+        self.ink_type_combo.addItems(list(INK_TYPES.keys()))
+        self.ink_type_combo.setToolTip("Opacidad de la tinta en la simulación: la transparente filtra el color de abajo")
+        self.ink_type_combo.currentTextChanged.connect(lambda *_: self.update_preview())
+        substrate_layout.addWidget(self.ink_type_combo, 1, 1)
+        substrate_layout.addWidget(field_label("Límite de tinta"), 2, 0)
+        self.ink_limit_spin = QtWidgets.QDoubleSpinBox()
+        self.ink_limit_spin.setRange(100, 400)
+        self.ink_limit_spin.setDecimals(0)
+        self.ink_limit_spin.setSuffix(" %")
+        self.ink_limit_spin.setValue(TOTAL_INK_LIMIT)
+        self.ink_limit_spin.setToolTip("Suma máxima de C+M+Y+K. Textil: 240–280 %")
+        substrate_layout.addWidget(self.ink_limit_spin, 2, 1)
+        controls_layout.addWidget(substrate_group)
 
         # === SALIDA ===
         format_group = QtWidgets.QGroupBox("Salida")
@@ -1010,6 +1044,39 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         preview_group = QtWidgets.QGroupBox("Simulación de impresión")
         preview_layout = QtWidgets.QVBoxLayout(preview_group)
+        view_bar = QtWidgets.QHBoxLayout()
+        view_bar.setSpacing(8)
+        self.view_mode_combo = QtWidgets.QComboBox()
+        self.view_mode_combo.addItem("Impreso", "print")
+        self.view_mode_combo.addItem("Tinta total", "tac")
+        self.view_mode_combo.addItem("Puntos en riesgo", "dots")
+        self.view_mode_combo.addItem("Prueba de calce", "registration")
+        self.view_mode_combo.setToolTip("Tinta total: rojo = supera el límite. Puntos en riesgo: naranja se pierde, "
+                                        "azul se cierra. Prueba de calce: corre cada tinta para ver dónde asoma la base")
+        self.view_mode_combo.currentIndexChanged.connect(self.on_view_mode_changed)
+        view_bar.addWidget(QtWidgets.QLabel("Ver"))
+        view_bar.addWidget(self.view_mode_combo)
+        self.misregister_spin = QtWidgets.QDoubleSpinBox()
+        self.misregister_spin.setRange(0.05, 2.0)
+        self.misregister_spin.setSingleStep(0.05)
+        self.misregister_spin.setValue(0.3)
+        self.misregister_spin.setSuffix(" mm")
+        self.misregister_spin.setToolTip("Descalce simulado de cada tinta")
+        self.misregister_spin.valueChanged.connect(lambda *_: self.update_preview())
+        self.misregister_spin.setVisible(False)
+        view_bar.addWidget(self.misregister_spin)
+        view_bar.addStretch()
+        self.step_label = QtWidgets.QLabel("Todas las pasadas")
+        self.step_label.setProperty("rol", "secundario")
+        view_bar.addWidget(self.step_label)
+        self.step_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.step_slider.setRange(0, 5)
+        self.step_slider.setValue(5)
+        self.step_slider.setFixedWidth(160)
+        self.step_slider.setToolTip("Simula el trabajo pasada por pasada, en el orden de impresión")
+        self.step_slider.valueChanged.connect(self.on_step_changed)
+        view_bar.addWidget(self.step_slider)
+        preview_layout.addLayout(view_bar)
         self.preview_label = ZoomablePreviewLabel()
         self.preview_label.setMinimumSize(400, 300)
         preview_layout.addWidget(self.preview_label)
@@ -1081,6 +1148,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.lpi_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.mesh_spin.valueChanged.connect(self.update_moire_analysis)
         self.mode_combo.currentTextChanged.connect(self.on_mode_changed)
+        self.ink_limit_spin.valueChanged.connect(self.schedule_reseparation)
         for control in (self.trap_spin, self.spot_softness_spin):
             control.valueChanged.connect(self.schedule_reseparation)
         self.spot_angle_spin.valueChanged.connect(self.schedule_rescreen)
@@ -2266,6 +2334,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             resolution_factor=resolution.get("factor", 1.0),
             resolution_method=resolution.get("method"),
             white_base=self.white_base_cb.isChecked(),
+            ink_limit=self.ink_limit_spin.value(),
+            ink_type=self.ink_type_combo.currentText(),
+            substrate=self.substrate_combo.currentText(),
             thresholds=dict(self.channel_thresholds),
             density={ch: spin.value() for ch, spin in self.density_spins.items()},
             channel_order=list(self.channel_order),
@@ -2307,6 +2378,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.mirror_cb.setChecked(settings.mirror)
         self.negative_cb.setChecked(settings.negative)
         self.control_strip_cb.setChecked(settings.control_strip)
+        self.ink_limit_spin.setValue(settings.ink_limit)
+        self.ink_type_combo.setCurrentText(settings.ink_type)
+        self.substrate_combo.blockSignals(True)
+        self.substrate_combo.setCurrentText(settings.substrate)
+        self.substrate_combo.blockSignals(False)
         self.garment_color = QtGui.QColor(*settings.garment_rgb)
         self.garment_color_btn.setText(f"Color de la prenda: {self.garment_color.name().upper()}")
         self.trap_spin.setValue(settings.trap_mm)
@@ -2448,53 +2524,84 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.is_preview_updating = False
 
     def generate_composite_preview(self):
-        """
-        VERSIÓN LIGERAMENTE OPTIMIZADA de tu función existente - REEMPLAZA la que tienes
-        """
-        try:
-            if not self.preview_cache:
-                return
+        """Simulación del impreso o vista de control de calidad, según «Ver»."""
+        if not self.preview_cache:
+            return
+        settings = self.job_settings()
+        order = [ch for ch in settings.channels() if ch in self.preview_cache]
+        self.step_slider.blockSignals(True)
+        at_end = self.step_slider.value() >= self.step_slider.maximum()
+        self.step_slider.setMaximum(len(order))
+        if at_end:
+            self.step_slider.setValue(len(order))
+        self.step_slider.blockSignals(False)
+        steps = self.step_slider.value()
+        self.step_label.setText("Todas las pasadas" if steps >= len(order) else
+                                ("Solo la prenda" if steps == 0 else
+                                 f"Pasada {steps}/{len(order)}: {self.channel_display_name(order[steps - 1])}"))
 
-            h, w = next(iter(self.preview_cache.values())).shape
-            
-            # Crear canvas más eficientemente
-            garment_color_float = np.array(self.garment_color.getRgbF()[:3], dtype=np.float32)
-            canvas = np.full((h, w, 3), garment_color_float, dtype=np.float32)
+        mode = self.view_mode_combo.currentData()
+        garment = list(self.garment_color.getRgb()[:3])
+        ink_rgb = {ch: self.channel_colors[ch].getRgb()[:3] for ch in order}
+        printed = sim.simulate(
+            self.channel_arrays, self.preview_cache, settings, ink_rgb, garment,
+            scale=self.preview_scale, show_screen=self.show_halftones_cb.isChecked(),
+            opacity=INK_TYPES.get(self.ink_type_combo.currentText(), 0.25),
+            steps=None if mode != 'print' else steps,
+            misregister_mm=self.misregister_spin.value() if mode == 'registration' else 0.0)
+        if mode == 'tac':
+            image = sim.tac_overlay(printed, self.channel_arrays, settings)
+        elif mode == 'dots':
+            image = sim.dot_risk_overlay(printed, self.channel_arrays, settings)
+        else:
+            image = printed
+        image = np.ascontiguousarray(image)
+        h, w = image.shape[:2]
+        qimage = QtGui.QImage(image.data, w, h, w * 3, QtGui.QImage.Format_RGB888)
+        self.preview_label.setPixmap(QtGui.QPixmap.fromImage(qimage.copy()))
 
-            # Determinar canales a mostrar (tu lógica existente)
-            channels_to_show = [ch for ch in self.job_settings().channels() if ch in self.preview_cache]
+    def on_view_mode_changed(self, *_):
+        mode = self.view_mode_combo.currentData()
+        self.misregister_spin.setVisible(mode == 'registration')
+        self.step_slider.setEnabled(mode == 'print')
+        self.update_preview()
 
-            # Simulación de lo impreso: trama + ganancia de punto de la prensa,
-            # o tono continuo si «Ver trama» está desactivado
-            settings = self.job_settings()
-            gain = tone_rules.GainModel.from_settings(settings)
-            show_screen = self.show_halftones_cb.isChecked()
-            for channel in channels_to_show:
-                if True:
-                    if show_screen:
-                        mask = tone_rules.printed_ink(self.preview_cache[channel], gain,
-                                                      settings.cell_px * self.preview_scale)
-                    else:
-                        film = tone_rules.apply_tone(self.channel_arrays[channel], channel, settings)
-                        mask = gain.printed(film / 255.0).astype(np.float32)
-                    mask = mask[:, :, np.newaxis]
-                    ink_rgb = np.array(self.channel_colors[channel].getRgbF()[:3], dtype=np.float32)
-                    
-                    spot = settings.spot(channel)
-                    if channel == 'W' or (spot and spot.get('opaque')):
-                        # Tinta cubriente: tapa lo que hay debajo
-                        canvas = (canvas * (1.0 - mask)) + (ink_rgb * mask)
-                    else:
-                        light_passing_through = 1.0 - ((1.0 - ink_rgb) * mask)
-                        canvas = canvas * light_passing_through
-            
-            # Convertir resultado final
-            final_image = np.clip(canvas * 255, 0, 255).astype(np.uint8)
-            qimage = QtGui.QImage(final_image.data, w, h, w * 3, QtGui.QImage.Format_RGB888)
-            self.preview_label.setPixmap(QtGui.QPixmap.fromImage(qimage))
+    def on_step_changed(self, *_):
+        self.update_preview()
 
-        except Exception as e:
-            print(f"❌ Error en vista previa compuesta: {e}")
+    def apply_substrate_profile(self, name):
+        profile = SUBSTRATE_PROFILES.get(name)
+        if not profile:
+            return
+        self.garment_color = QtGui.QColor(*profile["garment"])
+        self.garment_color_btn.setText(f"Color de la prenda: {self.garment_color.name().upper()}")
+        self.white_base_cb.setChecked(profile["white_base"])
+        self.ink_limit_spin.setValue(profile["ink_limit"])
+        self.min_dot_spin.setValue(profile["min_dot"])
+        self.max_dot_spin.setValue(profile["max_dot"])
+        if not self.dot_gain_curve:
+            self.dot_gain_spin.setValue(profile["dot_gain"])
+        if self.image is not None and self.preview_cache:
+            self.process_cmyk()
+
+    def apply_mesh_hold_limits(self):
+        low, high = sim.holdable_range(self.mesh_tpi(), self.current_lpi())
+        self.min_dot_spin.setValue(round(low))
+        self.max_dot_spin.setValue(round(high))
+
+    def show_quality_summary(self, settings):
+        """Resumen de control de calidad en la barra de estado tras separar."""
+        report = sim.quality_report(self.channel_arrays, settings)
+        parts = [f"{settings.lpi:g} LPI a {settings.dpi} DPI"]
+        if settings.mode == 'cmyk':
+            parts.append(f"tinta total máx. {report['tac_max']:.0f} %"
+                         + (f" ({report['tac_over']:.1%} del área sobre el límite)" if report['tac_over'] > 0.001 else ""))
+        if report['lost'] > 0.005:
+            parts.append(f"{report['lost']:.1%} con puntos < {report['hold_min']:.0f} % que la malla no sostiene")
+        if report['plugged'] > 0.005:
+            parts.append(f"{report['plugged']:.1%} con sombras > {report['hold_max']:.0f} % que se cerrarán")
+        parts.append(f"vista previa al {self.preview_scale:.0%}")
+        self.status_bar.showMessage("Separado: " + "; ".join(parts) + ".")
 
     def on_threshold_changed(self):
         """
@@ -3280,12 +3387,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 self.image, self.image_alpha, settings, preview=True)
             self.update_preview()
 
-            paper_note = ""
-            if needs_paper_fit(self.image.shape, settings):
-                paper_note = f" en {settings.paper_width_mm:g}×{settings.paper_height_mm:g} mm"
-            self.status_bar.showMessage(
-                f"Separado{paper_note}: {settings.lpi:g} LPI a {settings.dpi} DPI. "
-                f"Vista previa al {self.preview_scale:.0%}; la exportación usa resolución completa.")
+            self.show_quality_summary(settings)
         except Exception as e:
             print(f"❌ Error durante la separación: {e}")
             import traceback

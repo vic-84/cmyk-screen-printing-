@@ -54,6 +54,8 @@ class JobSettings:
 
     # Separación
     gcr: float = GCR_AMOUNT
+    ink_type: str = "Plastisol de proceso"
+    substrate: str = "Personalizado"
     ink_limit: float = TOTAL_INK_LIMIT   # %
     resolution_factor: float = 1.0
     resolution_method: str = 'INTER_CUBIC'

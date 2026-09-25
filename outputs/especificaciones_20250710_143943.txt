@@ -1,0 +1,68 @@
+ESPECIFICACIONES DE TRABAJO SERIGRÁFICO
+==================================================
+
+Fecha y hora: 2025-07-10 14:39:47
+Aplicación: Asistente de Serigrafía Profesional
+
+CONFIGURACIÓN DE FORMATO:
+------------------------------
+Formato seleccionado: A3
+Dimensiones del papel: 297 x 420 mm
+DPI de salida: 300
+Ajustar al formato: SÍ
+Guías de registro: SÍ
+Margen para guías: 15 mm
+Tamaño de cruces: 8 mm
+
+CONFIGURACIÓN DE HALFTONE:
+------------------------------
+Lineatura (LPI): 45 LPI (malla 120)
+Forma de punto: Redonda
+Mejora de resolución: Mejorar 200% (alta calidad)
+Base blanca incluida: SÍ
+Color de prenda: #ffffff
+
+ORDEN DE IMPRESIÓN Y UMBRALES:
+-----------------------------------
+1. Canal W - Color: #ffffff - Umbral: 128
+2. Canal Y - Color: #ffff00 - Umbral: 128
+3. Canal C - Color: #00ffff - Umbral: 176
+4. Canal M - Color: #ff00ff - Umbral: 128
+5. Canal K - Color: #000000 - Umbral: 64
+
+INFORMACIÓN DE IMAGEN ORIGINAL:
+-----------------------------------
+Archivo: Gemini_Generated_Image_i0i7qri0i7qri0i7.jpeg
+Dimensiones originales: 2048 x 2048 px
+DPI original: 72
+Tamaño físico original: 72.2 x 72.2 cm
+
+ARCHIVOS GENERADOS:
+--------------------
+• POSITIVO_W_20250710_143943.png
+• POSITIVO_Y_20250710_143943.png
+• POSITIVO_C_20250710_143943.png
+• POSITIVO_M_20250710_143943.png
+• POSITIVO_K_20250710_143943.png
+• cmyk_limpio_20250710_143943.pdf
+• cmyk_con_guias_20250710_143943.pdf
+
+INSTRUCCIONES DE USO:
+--------------------
+1. Los archivos PNG están listos para grabado de pantallas
+2. Usar emulsión fotopolimérica de calidad profesional
+3. Verificar orientación correcta al exponer
+4. Las guías de registro ayudan en el centrado y alineación
+5. Las cruces en esquinas son para registro preciso
+6. Las marcas centrales facilitan el posicionamiento
+7. Realizar prueba de impresión antes de producción masiva
+8. Los PDFs contienen todos los canales en páginas separadas
+
+DATOS TÉCNICOS:
+---------------
+• Halftones optimizados para calidad profesional
+• Valores binarios preservados (0 y 255)
+• Interpolación INTER_NEAREST para redimensionado
+• Ángulos de canal anti-moiré aplicados automáticamente
+• Guías de registro incluidas según estándares profesionales
+• Margen de 15mm para manipulación

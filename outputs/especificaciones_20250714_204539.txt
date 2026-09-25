@@ -1,0 +1,68 @@
+ESPECIFICACIONES DE TRABAJO SERIGRÁFICO
+==================================================
+
+Fecha y hora: 2025-07-14 20:45:43
+Aplicación: Asistente de Serigrafía Profesional
+
+CONFIGURACIÓN DE FORMATO:
+------------------------------
+Formato seleccionado: A3
+Dimensiones del papel: 297 x 420 mm
+DPI de salida: 300
+Ajustar al formato: SÍ
+Guías de registro: SÍ
+Margen para guías: 15 mm
+Tamaño de cruces: 8 mm
+
+CONFIGURACIÓN DE HALFTONE:
+------------------------------
+Lineatura (LPI): 45 LPI (malla 120)
+Forma de punto: Redonda
+Mejora de resolución: Mejorar 200% (alta calidad)
+Base blanca incluida: SÍ
+Color de prenda: #ffffff
+
+ORDEN DE IMPRESIÓN Y UMBRALES:
+-----------------------------------
+1. Canal W - Color: #ffffff - Umbral: 128
+2. Canal Y - Color: #ffff00 - Umbral: 91
+3. Canal C - Color: #00ffff - Umbral: 128
+4. Canal M - Color: #ff00ff - Umbral: 180
+5. Canal K - Color: #000000 - Umbral: 205
+
+INFORMACIÓN DE IMAGEN ORIGINAL:
+-----------------------------------
+Archivo: Barajas Menu_logo.pdf
+Dimensiones originales: 1875 x 1425 px
+DPI original: 300
+Tamaño físico original: 15.9 x 12.1 cm
+
+ARCHIVOS GENERADOS:
+--------------------
+• POSITIVO_W_20250714_204539.png
+• POSITIVO_Y_20250714_204539.png
+• POSITIVO_C_20250714_204539.png
+• POSITIVO_M_20250714_204539.png
+• POSITIVO_K_20250714_204539.png
+• cmyk_limpio_20250714_204539.pdf
+• cmyk_con_guias_20250714_204539.pdf
+
+INSTRUCCIONES DE USO:
+--------------------
+1. Los archivos PNG están listos para grabado de pantallas
+2. Usar emulsión fotopolimérica de calidad profesional
+3. Verificar orientación correcta al exponer
+4. Las guías de registro ayudan en el centrado y alineación
+5. Las cruces en esquinas son para registro preciso
+6. Las marcas centrales facilitan el posicionamiento
+7. Realizar prueba de impresión antes de producción masiva
+8. Los PDFs contienen todos los canales en páginas separadas
+
+DATOS TÉCNICOS:
+---------------
+• Halftones optimizados para calidad profesional
+• Valores binarios preservados (0 y 255)
+• Interpolación INTER_NEAREST para redimensionado
+• Ángulos de canal anti-moiré aplicados automáticamente
+• Guías de registro incluidas según estándares profesionales
+• Margen de 15mm para manipulación

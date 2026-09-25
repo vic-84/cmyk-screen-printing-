@@ -1,0 +1,57 @@
+{
+  "categorías": [
+    {
+      "nombre": "Problemas de Malla",
+      "problemas": [
+        {
+          "titulo": "El desemulsionado se dificulta",
+          "causas": [
+            {
+              "descripcion": "Se utilizó emulsión textil o endurecida por calor/tratamiento químico.",
+              "solucion": "Utilizar emulsiones resistentes al agua SOLO al imprimir con tintas base agua. Controlar el uso de endurecedores. [cite_start](Ref: Pág. 243 [cite: 4123])"
+            },
+            {
+              "descripcion": "La matriz se ha expuesto demasiado tiempo a la luz del sol.",
+              "solucion": "Guardar las matrices donde no reciban la luz directa del sol. [cite_start](Ref: Pág. 243 [cite: 4125])"
+            },
+            {
+                "descripcion": "Temperatura excesiva durante la exposición o el secado.",
+                "solucion": "Controlar que la fuente de luz no emita demasiado calor. Usar aire tibio, no caliente, para secar. [cite_start](Ref: Pág. 243 [cite: 4127, 4129])"
+            }
+          ]
+        },
+        {
+          "titulo": "La malla queda con 'imagen fantasma'",
+          "causas": [
+              {
+                  "descripcion": "Limpieza deficiente después de imprimir.",
+                  "solucion": "Después de imprimir, se debe limpiar a fondo la matriz. Si el problema persiste, efectuar una limpieza profunda. [cite_start](Ref: Pág. 244 [cite: 4131])"
+              },
+              {
+                  "descripcion": "Se usó malla multifilamento.",
+                  "solucion": "Emplear mallas monofilamento, que son más fáciles de limpiar. [cite_start](Ref: Pág. 244 [cite: 4132])"
+              }
+          ]
+        }
+      ]
+    },
+    {
+        "nombre": "Problemas de Películas",
+        "problemas": [
+            {
+                "titulo": "Los colores no calzan en las películas",
+                "causas": [
+                    {
+                        "descripcion": "Se utilizó un calce preciso o exacto, difícil de lograr en serigrafía.",
+                        "solucion": "Utilizar un calce flotante o con ribete/filete para facilitar el registro. [cite_start](Ref: Pág. 243 [cite: 4117])"
+                    },
+                    {
+                        "descripcion": "Descalce por deficiente separación manual o montaje inadecuado.",
+                        "solucion": "No realizar 'pegoteo' de películas. Cada separación de color debe ser una sola lámina. Revisar y ajustar por las cruces de registro. [cite_start](Ref: Pág. 243 [cite: 4118])"
+                    }
+                ]
+            }
+        ]
+    }
+  ]
+}

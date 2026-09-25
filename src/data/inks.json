@@ -1,0 +1,42 @@
+[
+  {
+    "id": "acrilica_copage",
+    "nombre": "Tinta Acrílica (Copage/Normal)",
+    "base": "Agua",
+    "soportes_ideales": ["Textil Algodón Claro", "Papel", "Cartón"],
+    "resistencia_solventes": "Baja",
+    "notas_curado": "Secado al aire, polimerizado completo en 72h. Termofijado a 150-170°C para mayor resistencia.",
+    "malla_recomendada": [45, 85],
+    "referencia_manual": "Págs. 193, 199"
+  },
+  {
+    "id": "acrilica_cubriente",
+    "nombre": "Tinta Acrílica Cubriente (Base Blanca/Mix)",
+    "base": "Agua",
+    "soportes_ideales": ["Textil Algodón Oscuro"],
+    "resistencia_solventes": "Baja",
+    "notas_curado": "Requiere presecado entre colores. Termofijado a 150-170°C.",
+    "malla_recomendada": [30, 60],
+    "referencia_manual": "Pág. 199"
+  },
+  {
+    "id": "plastisol_normal",
+    "nombre": "Plastisol Estándar",
+    "base": "Plastisol (PVC)",
+    "soportes_ideales": ["Textil Algodón Claro", "Textil Algodón Oscuro", "Mezclas 50/50"],
+    "resistencia_solventes": "Alta",
+    "notas_curado": "NO SECA AL AIRE. Requiere curado por calor a 160°C. Presecado intermedio (gelificado) a 90-110°C.",
+    "malla_recomendada": [36, 120],
+    "referencia_manual": "Págs. 227-230"
+  },
+  {
+    "id": "pvc_solvente",
+    "nombre": "Tinta para PVC (Base Solvente)",
+    "base": "Solvente",
+    "soportes_ideales": ["PVC Rígido", "PVC Flexible", "Autoadhesivos Vinílicos"],
+    "resistencia_solventes": "N/A (es la base)",
+    "notas_curado": "Secado rápido por evaporación de solvente.",
+    "malla_recomendada": [90, 180],
+    "referencia_manual": "Pág. 126"
+  }
+]

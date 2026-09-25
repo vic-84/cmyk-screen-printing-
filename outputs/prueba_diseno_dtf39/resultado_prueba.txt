@@ -1,0 +1,10 @@
+PRUEBA DE SEPARACIÓN DTF
+Imagen: diseno-dtf39.png
+Tamaño: 3543x5315 px
+Canales: W, Y, C, M, K
+Base blanca: sí
+Semitono: sí
+Guías de registro: sí
+MAE RGB en píxeles opacos: 61.15/255
+RMSE RGB en píxeles opacos: 83.42/255
+Correlación de luminancia en píxeles opacos: 0.7183

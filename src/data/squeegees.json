@@ -1,0 +1,23 @@
+[
+  {
+    "id": "blanda_redonda",
+    "dureza": "Blanda (50-55 Shore)",
+    "perfil": "Redondo",
+    "uso_recomendado": "Máximo depósito de tinta. Ideal para bases cubrientes y tintas puff en textiles.",
+    "referencia_manual": "Págs. 59, 60"
+  },
+  {
+    "id": "media_recta",
+    "dureza": "Media (60-65 Shore)",
+    "perfil": "Borde Recto",
+    "uso_recomendado": "Uso general en gráfica (papel, cartón) y detalles finos en textil.",
+    "referencia_manual": "Págs. 59, 60"
+  },
+  {
+    "id": "dura_afilada",
+    "dureza": "Dura (70-75 Shore)",
+    "perfil": "Biselado o Recto Afilado",
+    "uso_recomendado": "Mínimo depósito de tinta. Ideal para cuatricromías, tintas UV y superficies no absorbentes como vidrio o plástico.",
+    "referencia_manual": "Págs. 59, 60"
+  }
+]

@@ -1,7 +1,6 @@
 # Origen: claude_test_fixed_lpi.py
 # Sección: Variables globales de configuración y constantes
 
-import numpy as np
 
 # Especificaciones técnicas detalladas de mallas serigráficas
 MESH_SPECIFICATIONS = {

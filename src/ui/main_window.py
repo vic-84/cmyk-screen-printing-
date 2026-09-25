@@ -1,16 +1,12 @@
 # Origen: claude_test_fixed_lpi.py
 # Versión: FINAL CORREGIDA Y REESTRUCTURADA
 
-import sys
 import os
-import io
 import json
 from datetime import datetime
 import numpy as np
 import cv2
-from PIL import Image
 from PyQt5 import QtWidgets, QtGui, QtCore
-import re
 
 # --- Importaciones de módulos locales (ajusta las rutas si es necesario) ---
 # Se asume una estructura de carpetas como:
@@ -36,7 +32,7 @@ from ..utils.helpers import convert_units, format_dimension_display
 from .pdf_selector import PDFPageSelector
 from . import theme
 from ..core.job import JobSettings
-from ..core.screening import halftone, screen_channel
+from ..core.screening import screen_channel
 from ..core.separation import render
 from ..core import mesh as mesh_rules
 from ..core import output
@@ -45,7 +41,6 @@ from ..core import simulate as sim
 from ..core.simulate import INK_TYPES, SUBSTRATE_PROFILES
 from ..core.color import detect_palette, lab_to_rgb, match_library, read_library, rgb_to_lab, write_ase
 from ..core.spot import default_needs_base, order_light_to_dark
-from ..core import tone as tone_rules
 
 
 # --- Verificación de dependencias ---

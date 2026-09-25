@@ -19,9 +19,8 @@ import zipfile
 from collections import OrderedDict
 
 import cv2
-import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from ..core import input as doc_input

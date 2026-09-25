@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh" } ] }
+    ]
+  },
+  "extraKnownMarketplaces": {
+    "thedotmack":             { "source": { "source": "github", "repo": "thedotmack/claude-mem" } },
+    "ponytail":               { "source": { "source": "github", "repo": "DietrichGebert/ponytail" } },
+    "claude-video":           { "source": { "source": "github", "repo": "bradautomates/claude-video" } },
+    "superpowers-dev":        { "source": { "source": "github", "repo": "obra/superpowers" } },
+    "context-mode":           { "source": { "source": "github", "repo": "mksglu/context-mode" } },
+    "knowledge-work-plugins": { "source": { "source": "github", "repo": "anthropics/knowledge-work-plugins" } }
+  },
+  "enabledPlugins": {
+    "superpowers@superpowers-dev": true,
+    "claude-mem@thedotmack": true,
+    "context-mode@context-mode": true,
+    "ponytail@ponytail": true,
+    "watch@claude-video": true,
+    "design@knowledge-work-plugins": true,
+    "engineering@knowledge-work-plugins": true
+  }
+}

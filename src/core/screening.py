@@ -66,9 +66,26 @@ def _spot_calibration(shape):
 BAND_ROWS = 512
 
 
-def halftone(channel, cell_px, shape='circle', angle=0.0):
+def _bayer(n=8):
+    """Matriz de Bayer n×n normalizada a 0..1 (umbrales repartidos al máximo)."""
+    m = np.zeros((1, 1))
+    while m.shape[0] < n:
+        m = np.block([[4 * m, 4 * m + 2], [4 * m + 3, 4 * m + 1]])
+    return ((m + 0.5) / m.size).astype(np.float32)
+
+
+BAYER = _bayer()
+
+
+def halftone(channel, cell_px, shape='circle', angle=0.0, min_dot=0.0, max_dot=100.0):
     """
     Trama un canal de tinta (uint8, 255 = 100 % de tinta).
+
+    min_dot / max_dot (%): tramado híbrido. Un tono por debajo del punto mínimo
+    no se borra (dejaría las luces planas, sin modelado): se imprime con puntos
+    del tamaño mínimo en solo una parte de las celdas, repartidas con Bayer,
+    así el tono medio se conserva y ningún punto es menor de lo que la malla
+    sostiene. Igual en sombras sobre el máximo, con huecos del tamaño mínimo.
 
     cell_px: tamaño de la celda en píxeles (DPI / LPI). Se usa en float para
     que el LPI real coincida con el pedido. Se procesa por franjas de filas
@@ -77,6 +94,7 @@ def halftone(channel, cell_px, shape='circle', angle=0.0):
     h, w = channel.shape
     out = np.empty((h, w), dtype=np.uint8)
     max_value, table = _spot_calibration(shape)
+    low, high = min_dot / 100.0, max_dot / 100.0
     scale_index = (CALIBRATION_BINS - 1) / max_value
 
     angle_rad = np.radians(angle)
@@ -96,6 +114,15 @@ def halftone(channel, cell_px, shape='circle', angle=0.0):
         index = np.clip(spot * scale_index, 0, CALIBRATION_BINS - 1).astype(np.int32)
         pattern = table[index]
         ink_level = channel[top:bottom].astype(np.float32) / 255.0
+        if low > 0 or high < 1:
+            # Umbral de la celda (todas sus celdas vecinas con umbrales distintos)
+            n = BAYER.shape[0]
+            cell_threshold = BAYER[np.floor(y_rot / cell_px).astype(np.int32) % n,
+                                   np.floor(x_rot / cell_px).astype(np.int32) % n]
+            light = (ink_level > 0) & (ink_level < low)
+            ink_level[light] = np.where(ink_level[light] / low > cell_threshold[light], low, 0.0)
+            dark = (ink_level > high) & (ink_level < 1)
+            ink_level[dark] = np.where((1 - ink_level[dark]) / (1 - high) > cell_threshold[dark], high, 1.0)
         ink = (ink_level > pattern) | (ink_level >= 1.0)
         out[top:bottom] = np.where(ink, 0, 255)
     return out
@@ -111,6 +138,8 @@ def screen_channel(channel, name, settings, scale=1.0):
     if settings.mode == 'index' and name != 'W':
         # Color índice: películas sólidas de píxeles cuadrados, sin trama
         return np.where(channel >= 128, 0, 255).astype(np.uint8)
-    toned = apply_tone(channel, name, settings)
+    toned = apply_tone(channel, name, settings, clip=False)
     cell = max(2.0, settings.cell_px * scale)
-    return halftone(toned, cell, settings.dot_shape, settings.channel_angle(name))
+    tone = settings.tone_for(name)
+    return halftone(toned, cell, settings.dot_shape, settings.channel_angle(name),
+                    tone['min_dot'], tone['max_dot'])

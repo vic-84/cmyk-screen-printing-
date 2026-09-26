@@ -85,7 +85,8 @@ def simulate(channels, screens, settings, ink_rgb, garment_rgb, scale=1.0, show_
         if show_screen:
             ink = printed_ink(screens[channel], gain, settings.cell_px * scale)
         else:
-            film = apply_tone(channels[channel], channel, settings)
+            # Sin trama se ve el tono medio que deja el tramado híbrido
+            film = apply_tone(channels[channel], channel, settings, clip=False)
             ink = gain.printed(film / 255.0).astype(np.float32)
         if offset_px and channel != 'W':
             dx, dy = MISREGISTER_DIRECTIONS[moving % len(MISREGISTER_DIRECTIONS)]

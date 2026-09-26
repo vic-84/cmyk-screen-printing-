@@ -217,6 +217,7 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         
         # Imagen original
         self.original_pixmap = QtGui.QPixmap()
+        self.mm_per_px = None
         
         # Configurar eventos
         self.setMouseTracking(True)
@@ -270,9 +271,9 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         self.zoom_fit_btn.clicked.connect(self.zoom_to_fit)
         controls_layout.addWidget(self.zoom_fit_btn)
 
-        self.zoom_100_btn = QtWidgets.QPushButton("1:1")
+        self.zoom_100_btn = QtWidgets.QPushButton("Tamaño real")
         self.zoom_100_btn.setFixedHeight(24)
-        self.zoom_100_btn.setToolTip("Tamaño real en píxeles, para revisar la trama")
+        self.zoom_100_btn.setToolTip("Muestra el diseño al tamaño en que se imprime (el % del zoom es respecto a ese tamaño)")
         self.zoom_100_btn.clicked.connect(self.zoom_to_100)
         controls_layout.addWidget(self.zoom_100_btn)
 
@@ -291,13 +292,23 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         super().resizeEvent(event)
         self.position_controls()
         
-    def setPixmap(self, pixmap):
-        """Establecer nueva imagen y resetear zoom"""
+    def setPixmap(self, pixmap, mm_per_px=None):
+        """
+        Nueva imagen. Solo se ajusta a la ventana con la primera imagen o si
+        cambia su tamaño; al retocar un ajuste se conservan zoom y posición.
+        mm_per_px: milímetros impresos por píxel de la imagen (para el tamaño real).
+        """
         if isinstance(pixmap, QtGui.QPixmap) and not pixmap.isNull():
+            same_size = not self.original_pixmap.isNull() and self.original_pixmap.size() == pixmap.size()
             self.original_pixmap = pixmap
-            self.zoom_factor = 1.0
-            self.update_display()
-            self.zoom_to_fit()  # Ajustar automáticamente
+            self.mm_per_px = mm_per_px
+            if same_size:
+                h, v = self.horizontalScrollBar().value(), self.verticalScrollBar().value()
+                self.update_display()
+                self.horizontalScrollBar().setValue(h)
+                self.verticalScrollBar().setValue(v)
+            else:
+                self.zoom_to_fit()
         else:
             # Manejar texto o imagen vacía
             self.original_pixmap = QtGui.QPixmap()
@@ -322,9 +333,18 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         self.image_label.setPixmap(scaled_pixmap)
         self.image_label.resize(scaled_pixmap.size())
         
-        # Actualizar etiqueta de zoom
-        zoom_percent = int(self.zoom_factor * 100)
-        self.zoom_label.setText(f"{zoom_percent}%")
+        # El % es respecto al tamaño impreso: 100 % = lo que mide en la prenda
+        real = self.real_size_zoom()
+        self.zoom_label.setText(f"{self.zoom_factor / real:.0%}" if real else f"{self.zoom_factor:.0%}")
+
+    def real_size_zoom(self):
+        """Zoom con el que la imagen se ve en pantalla al tamaño impreso (None si no se sabe)."""
+        if not self.mm_per_px:
+            return None
+        # ponytail: el DPI físico lo informa el monitor (EDID); si una regla
+        # sobre la pantalla no coincide, el monitor informa mal su tamaño
+        screen_dpi = self.screen().physicalDotsPerInch()
+        return screen_dpi / 25.4 * self.mm_per_px
         
     def wheelEvent(self, event):
         """Zoom con rueda del mouse"""
@@ -404,8 +424,8 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         self.update_display()
         
     def zoom_to_100(self):
-        """Zoom al 100% (tamaño real)"""
-        self.zoom_factor = 1.0
+        """Zoom al tamaño impreso real (o 1:1 en píxeles si no se conoce la medida)."""
+        self.zoom_factor = min(self.max_zoom, self.real_size_zoom() or 1.0)
         self.update_display()
         
     def mousePressEvent(self, event):
@@ -469,7 +489,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         # --- 1. Inicialización de Variables de Trabajo (PRIMERO) ---
         self.db_inks = []
         self.db_squeegees = []
-        self.channel_color_buttons = {}
         self.image = None
         self.image_alpha = None
         self.image_info = None
@@ -827,16 +846,17 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         substrate_layout.addWidget(field_label("Sustrato"), 0, 0)
         self.substrate_combo = compact_combo(QtWidgets.QComboBox())
         self.substrate_combo.addItems(["Personalizado"] + list(SUBSTRATE_PROFILES.keys()))
-        self.substrate_combo.setToolTip("Aplica color de prenda, base blanca, límite de tinta, rango tonal y ganancia típicos")
+        self.substrate_combo.setToolTip("Material: pone límite de tinta, rango tonal, ganancia, base y un color de prenda típico.\n"
+                                        "El color exacto de tu prenda se elige abajo, en Prenda.")
         self.substrate_combo.currentTextChanged.connect(self.apply_substrate_profile)
         substrate_layout.addWidget(self.substrate_combo, 0, 1)
-        substrate_layout.addWidget(field_label("Tinta"), 1, 0)
+        substrate_layout.addWidget(field_label("Tinta"), 2, 0)
         self.ink_type_combo = compact_combo(QtWidgets.QComboBox())
         self.ink_type_combo.addItems(list(INK_TYPES.keys()))
         self.ink_type_combo.setToolTip("Opacidad de la tinta en la simulación: la transparente filtra el color de abajo")
         self.ink_type_combo.currentTextChanged.connect(lambda *_: self.update_preview())
-        substrate_layout.addWidget(self.ink_type_combo, 1, 1)
-        substrate_layout.addWidget(field_label("Base"), 3, 0)
+        substrate_layout.addWidget(self.ink_type_combo, 2, 1)
+        substrate_layout.addWidget(field_label("Base"), 4, 0)
         self.base_combo = compact_combo(QtWidgets.QComboBox())
         for name, rgb in BASE_PRESETS.items():
             self.base_combo.addItem(name, rgb)
@@ -844,23 +864,24 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.base_combo.setToolTip("Blanca: color más brillante en prenda oscura. Gris: cubre con menos tinta y "
                                    "tacto más suave. Gris bloqueadora: frena la migración del teñido en poliéster")
         self.base_combo.activated.connect(self.on_base_changed)
-        substrate_layout.addWidget(self.base_combo, 3, 1)
+        substrate_layout.addWidget(self.base_combo, 4, 1)
         self.base_rgb = list(BASE_PRESETS["Base blanca"])
-        substrate_layout.addWidget(field_label("Límite de tinta"), 2, 0)
+        substrate_layout.addWidget(field_label("Límite de tinta"), 3, 0)
         self.ink_limit_spin = QtWidgets.QDoubleSpinBox()
         self.ink_limit_spin.setRange(100, 400)
         self.ink_limit_spin.setDecimals(0)
         self.ink_limit_spin.setSuffix(" %")
         self.ink_limit_spin.setValue(TOTAL_INK_LIMIT)
         self.ink_limit_spin.setToolTip("Suma máxima de C+M+Y+K. Textil: 240–280 %")
-        substrate_layout.addWidget(self.ink_limit_spin, 2, 1)
+        substrate_layout.addWidget(self.ink_limit_spin, 3, 1)
         self.white_base_cb = QtWidgets.QCheckBox("Imprimir base")
         self.white_base_cb.setToolTip("Para prenda oscura: la base se imprime primero y se contrae en los bordes")
-        substrate_layout.addWidget(self.white_base_cb, 4, 1)
+        substrate_layout.addWidget(self.white_base_cb, 5, 1)
         self.garment_color_btn = QtWidgets.QPushButton("Color de la prenda…")
         self.garment_color_btn.clicked.connect(self.select_garment_color)
-        substrate_layout.addWidget(field_label("Prenda"), 5, 0)
-        substrate_layout.addWidget(self.garment_color_btn, 5, 1)
+        self.garment_color_btn.setToolTip("Color real de la tela: fondo de la simulación y qué zonas no llevan tinta")
+        substrate_layout.addWidget(field_label("Prenda"), 1, 0)
+        substrate_layout.addWidget(self.garment_color_btn, 1, 1)
         # Cuatricromía en prenda oscura con 4 estaciones: la tela hace de negro
         self.garment_black_cb = QtWidgets.QCheckBox("Usar la prenda como negro (sin película K)")
         self.garment_black_cb.setToolTip(
@@ -1107,7 +1128,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         channels_tab_layout.addWidget(secondary_label(
             "Orden de impresión de arriba abajo: ▲ ▼ o arrastra para cambiarlo. "
-            "Selecciona un canal para su umbral y su curva; doble clic para su color."))
+            "Selecciona un canal para su umbral y su curva; «Color» o doble clic para su color de tinta."))
 
         self.channel_list = DraggableChannelList(self)
         self.channel_list.setItemDelegate(
@@ -1184,7 +1205,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                                            ("Sombras", "Tonos oscuros (75 %)")), 1):
             curve_grid.addWidget(field_label(name), row, 0)
             slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-            slider.setRange(-30, 30)
+            slider.setRange(-50, 50)
             slider.setToolTip(f"{tip}: + más tinta de este color, − menos tinta")
             slider.valueChanged.connect(self.on_channel_curve_changed)
             curve_grid.addWidget(slider, row, 1)
@@ -1200,29 +1221,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         channels_tab_layout.addWidget(self.curve_box)
 
         channels_tabs.addTab(channels_tab, "Orden y umbral")
-
-        colors_tab = QtWidgets.QWidget()
-        colors_tab_layout = QtWidgets.QGridLayout(colors_tab)
-        colors_tab_layout.setContentsMargins(8, 8, 8, 8)
-        colors_tab_layout.setHorizontalSpacing(8)
-        colors_tab_layout.setVerticalSpacing(6)
-        colors_tab_layout.setColumnStretch(1, 1)
-
-        for i, ch in enumerate(['C', 'M', 'Y', 'K', 'W']):
-            colors_tab_layout.addWidget(QtWidgets.QLabel(CHANNEL_NAMES[ch]), i, 0)
-
-            color_btn = QtWidgets.QPushButton("")
-            color_btn.setToolTip(f"Cambiar el color de simulación de {CHANNEL_NAMES[ch].lower()}")
-            color_btn.clicked.connect(lambda _, c=ch: self.pick_channel_color(c))
-            self.channel_color_buttons[ch] = color_btn
-            colors_tab_layout.addWidget(color_btn, i, 1)
-
-            restore_btn = QtWidgets.QPushButton("Restaurar")
-            restore_btn.setToolTip("Volver al color de tinta por defecto")
-            restore_btn.clicked.connect(lambda _, c=ch: self.restore_channel_color_default(c))
-            colors_tab_layout.addWidget(restore_btn, i, 2)
-
-        channels_tabs.addTab(colors_tab, "Colores de tinta")
 
         adjust_tab = QtWidgets.QWidget()
         adjust_layout = QtWidgets.QGridLayout(adjust_tab)
@@ -1309,6 +1307,13 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         tone_grid.setRowStretch(7, 1)
         channels_tabs.addTab(tone_tab, "Tono por canal")
         channels_layout.addWidget(channels_tabs)
+        # Densidad, ángulo y tono por canal: para calibrar, no para el día a día
+        advanced_cb = QtWidgets.QCheckBox("Ajustes avanzados por canal (densidad, ángulo, calibración)")
+        advanced_cb.toggled.connect(lambda on: [channels_tabs.setTabVisible(i, on) for i in (1, 2)])
+        advanced_cb.setChecked(False)
+        for i in (1, 2):
+            channels_tabs.setTabVisible(i, False)
+        channels_layout.addWidget(advanced_cb)
         controls_layout.addWidget(channels_group)
         controls_layout.addStretch()
 
@@ -1451,7 +1456,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.view_individual_channel_cb.setEnabled(False)
 
         self.update_channel_list_ui()
-        self.update_all_color_buttons_ui()
 
         self.lpi_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.mesh_spin.valueChanged.connect(self.update_moire_analysis)
@@ -1546,11 +1550,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.channel_list.addItem(item)
         self.channel_list.blockSignals(False)
 
-    def update_all_color_buttons_ui(self):
-        """Actualiza el color de fondo de todos los botones de canal."""
-        for channel, button in self.channel_color_buttons.items():
-            if channel in self.channel_colors:
-                button.setStyleSheet(f"background-color: {self.channel_colors[channel].name()};")
 
 
     
@@ -1844,7 +1843,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.base_combo.setCurrentIndex(index if index >= 0 else self.base_combo.count() - 1)
         self.channel_colors['W'] = QtGui.QColor(*self.base_rgb)
         self.channel_list.viewport().update()
-        self.update_all_color_buttons_ui()
 
     def on_base_changed(self, *_):
         rgb = self.base_combo.currentData()
@@ -2345,7 +2343,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                                                 f"Color de {self.channel_display_name(channel).lower()}")
         if color.isValid():
             self.channel_colors[channel] = color
-            self.update_all_color_buttons_ui()
             self.update_channel_list_ui()
             self.update_preview()
 
@@ -2569,7 +2566,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                                                            plan=self.preview_guide_plan(settings)))
         h, w = image.shape[:2]
         qimage = QtGui.QImage(image.data, w, h, w * 3, QtGui.QImage.Format_RGB888)
-        self.preview_label.setPixmap(QtGui.QPixmap.fromImage(qimage.copy()))
+        self.preview_label.setPixmap(QtGui.QPixmap.fromImage(qimage.copy()), settings.paper_width_mm / w)
 
     def generate_composite_preview(self):
         """Simulación del impreso o vista de control de calidad, según «Ver»."""
@@ -2595,6 +2592,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                      and all(ch in self.channel_arrays for ch in 'CMYK'))
         if icc_proof:
             # La prueba ICC no usa la simulación: se evita calcularla
+            self.status_bar.showMessage("Prueba de color ICC: no muestra curvas, umbrales ni colores de tinta. "
+                                        "Para verlos usa Ver → Impreso.", 8000)
             self.show_on_canvas(icc.cmyk_to_srgb(self.channel_arrays, settings.icc_profile,
                                                  settings.icc_intent, settings.icc_bpc), settings, garment)
             return
@@ -2763,12 +2762,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
                 
 
-    def restore_channel_color_default(self, channel):
-        """Restaura el color de un canal a su valor por defecto."""
-        self.channel_colors[channel] = self.PURE_CMYK_COLORS[channel]
-        self.update_all_color_buttons_ui()
-        self.update_channel_list_ui()
-        self.update_preview()
 
         
 

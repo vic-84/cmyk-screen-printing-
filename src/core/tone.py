@@ -94,7 +94,7 @@ def color_curve(values, shifts):
     return np.interp(values, xs, ys)
 
 
-def tone_lut(density=100.0, gain=None, min_dot=0.0, max_dot=100.0, curve=None):
+def tone_lut(density=100.0, gain=None, min_dot=0.0, max_dot=100.0, curve=None, clip=True):
     """
     Tabla de 256 valores con densidad, curva de color, compensación de ganancia y rango tonal.
 
@@ -103,7 +103,8 @@ def tone_lut(density=100.0, gain=None, min_dot=0.0, max_dot=100.0, curve=None):
     gain: GainModel o ganancia al 50 % en puntos.
     min_dot / max_dot: en %. Por debajo del mínimo el punto no se sostiene en
     la malla y se elimina; por encima del máximo los puntos se cierran por la
-    ganancia y se imprime sólido.
+    ganancia y se imprime sólido. clip=False deja esos tonos para que la
+    trama los reparta con puntos sostenibles (ver screening.halftone).
     """
     model = gain if isinstance(gain, GainModel) else GainModel(gain or 0.0)
     values = np.arange(256) / 255.0
@@ -112,17 +113,19 @@ def tone_lut(density=100.0, gain=None, min_dot=0.0, max_dot=100.0, curve=None):
     if model.active:
         values = model.film(values)
     low, high = min_dot / 100.0, max_dot / 100.0
+    if not clip:
+        return np.round(values * 255).astype(np.uint8)
     values = np.where(values < low, 0.0, values)
     values = np.where(values > high, 1.0, values)
     return np.round(values * 255).astype(np.uint8)
 
 
-def apply_tone(channel, name, settings):
+def apply_tone(channel, name, settings, clip=True):
     """Aplica umbral y curva de tono del trabajo a un canal continuo."""
     adjusted = adjust_levels(channel, settings.thresholds.get(name, 128))
     tone = settings.tone_for(name)
     lut = tone_lut(settings.density.get(name, 100.0), GainModel.from_settings(settings, name),
-                   tone['min_dot'], tone['max_dot'], settings.channel_curve.get(name))
+                   tone['min_dot'], tone['max_dot'], settings.channel_curve.get(name), clip)
     return lut[adjusted]
 
 

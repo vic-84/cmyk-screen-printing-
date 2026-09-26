@@ -224,6 +224,19 @@ class CoreTests(unittest.TestCase):
         self.assertAlmostEqual(float(np.mean(screen == 0)), film / 255, delta=0.03)
         self.assertAlmostEqual(float(printed.mean()), 0.5, delta=0.04)
 
+    def test_hybrid_screen_keeps_light_tones_with_holdable_dots(self):
+        # 4 % con punto mínimo 10 %: no desaparece (luces planas) ni hace puntos chicos
+        cell = 20.0
+        screen = halftone(np.full((400, 400), round(0.04 * 255), np.uint8), cell, "circle", 0, 10, 90)
+        self.assertAlmostEqual(float(np.mean(screen == 0)), 0.04, delta=0.01)
+        count, _, stats, _ = cv2.connectedComponentsWithStats((screen == 0).astype(np.uint8))
+        areas = stats[1:, cv2.CC_STAT_AREA]
+        self.assertGreater(count - 1, 0)
+        self.assertGreaterEqual(int(areas.min()), int(0.08 * cell * cell))
+        # Sombras: 97 % con máximo 90 % deja huecos, no un sólido
+        dark = halftone(np.full((400, 400), round(0.97 * 255), np.uint8), cell, "circle", 0, 10, 90)
+        self.assertAlmostEqual(float(np.mean(dark == 0)), 0.97, delta=0.01)
+
     def test_tone_range_drops_small_dots_and_fills_large_ones(self):
         lut = tone.tone_lut(min_dot=10, max_dot=90)
         self.assertEqual(lut[int(0.05 * 255)], 0)

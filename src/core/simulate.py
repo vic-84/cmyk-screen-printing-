@@ -93,9 +93,14 @@ def simulate(channels, screens, settings, ink_rgb, garment_rgb, scale=1.0, show_
             moving += 1
         color = np.asarray(ink_rgb[channel], dtype=np.float32) / 255.0
         alpha = ink_opacity(channel, settings, opacity)
-        mask = ink[..., None]
-        covered = alpha * color + (1.0 - alpha) * canvas * color
-        canvas = canvas * (1.0 - mask) + covered * mask
+        # canvas·(1−m) + m·(α·color + (1−α)·canvas·color), por plano y en sitio:
+        # evita crear imágenes temporales de 3 planos (era lo más lento al retocar)
+        ink = ink.astype(np.float32, copy=False)
+        for i in range(3):
+            plane = canvas[..., i]
+            plane *= 1.0 - ink * (1.0 - (1.0 - alpha) * color[i])
+            if alpha:
+                plane += ink * (alpha * color[i])
     return np.clip(canvas * 255, 0, 255).astype(np.uint8)
 
 

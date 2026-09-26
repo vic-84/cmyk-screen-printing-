@@ -7,11 +7,12 @@ va sobre gris medio (entorno estándar de preprensa para juzgar color).
 """
 
 # Paleta
-MESA = "#DADDDB"          # Fondo de la ventana
-SUPERFICIE = "#F3F4F2"    # Paneles y campos
+MESA = "#E3E5E4"          # Fondo de la ventana
+SUPERFICIE = "#F7F8F7"    # Paneles y campos
 TEXTO = "#1E2427"         # Texto principal
 TEXTO_SUAVE = "#5B6569"   # Texto secundario
-LINEA = "#B8BEBD"         # Bordes
+LINEA = "#B8BEBD"         # Bordes de campos
+LINEA_SUAVE = "#CDD2D0"   # Bordes de paneles
 EMULSION = "#2F4690"      # Acento: acción principal y foco
 EMULSION_OSCURA = "#233670"
 GRIS_PREPRENSA = "#80827F"  # Entorno de la vista previa
@@ -35,18 +36,19 @@ QScrollArea#panelControles, QWidget#contenedorControles {{
 }}
 QGroupBox {{
     background: {SUPERFICIE};
-    border: 1px solid {LINEA};
-    border-radius: 3px;
-    margin-top: 1.4em;
-    padding: 10px 8px 8px 8px;
+    border: 1px solid {LINEA_SUAVE};
+    border-radius: 8px;
+    margin-top: 1.6em;
+    padding: 12px 10px 10px 10px;
     font-weight: 600;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
     subcontrol-position: top left;
     left: 2px;
-    padding: 0 2px;
+    padding: 0 4px;
     color: {TEXTO};
+    font-size: 10.5pt;
     background: {MESA};
 }}
 QLabel {{
@@ -71,25 +73,33 @@ QLabel[rol="campo"] {{
 QComboBox, QSpinBox, QDoubleSpinBox {{
     background: white;
     border: 1px solid {LINEA};
-    border-radius: 3px;
-    padding: 3px 6px;
-    min-height: 22px;
+    border-radius: 6px;
+    padding: 4px 8px;
+    min-height: 24px;
+}}
+QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {{
+    border-color: {TEXTO_SUAVE};
 }}
 QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {{
-    border: 1px solid {EMULSION};
+    border: 2px solid {EMULSION};
+    padding: 3px 7px;
 }}
 QPushButton {{
     background: white;
     border: 1px solid {LINEA};
-    border-radius: 3px;
+    border-radius: 6px;
     padding: 6px 12px;
-    min-height: 22px;
+    min-height: 24px;
 }}
 QPushButton:hover {{
     border-color: {TEXTO_SUAVE};
+    background: {SUPERFICIE};
+}}
+QPushButton:pressed {{
+    background: {MESA};
 }}
 QPushButton:focus {{
-    border: 1px solid {EMULSION};
+    border: 2px solid {EMULSION};
 }}
 QPushButton:disabled {{
     color: {TEXTO_SUAVE};
@@ -100,14 +110,14 @@ QPushButton#accionPrincipal {{
     border: 1px solid {EMULSION_OSCURA};
     color: white;
     font-weight: 600;
-    min-height: 30px;
+    min-height: 34px;
 }}
 QPushButton#accionPrincipal:hover {{
     background: {EMULSION_OSCURA};
 }}
 QPushButton#accionSecundaria {{
     font-weight: 600;
-    min-height: 30px;
+    min-height: 34px;
 }}
 QWidget#barraAcciones {{
     background: {SUPERFICIE};
@@ -121,7 +131,7 @@ QCheckBox::indicator {{
     width: 14px;
     height: 14px;
     border: 1px solid {TEXTO_SUAVE};
-    border-radius: 2px;
+    border-radius: 4px;
     background: white;
 }}
 QCheckBox::indicator:checked {{
@@ -138,12 +148,12 @@ QCheckBox:disabled {{
 QListWidget {{
     background: white;
     border: 1px solid {LINEA};
-    border-radius: 3px;
+    border-radius: 6px;
     outline: none;
 }}
 QTabWidget::pane {{
-    border: 1px solid {LINEA};
-    border-radius: 3px;
+    border: 1px solid {LINEA_SUAVE};
+    border-radius: 6px;
     background: {SUPERFICIE};
     top: -1px;
 }}
@@ -153,13 +163,34 @@ QTabBar::tab {{
     border-bottom: none;
     padding: 5px 14px;
     margin-right: 2px;
-    border-top-left-radius: 3px;
-    border-top-right-radius: 3px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
     color: {TEXTO_SUAVE};
 }}
 QTabBar::tab:selected {{
     background: {SUPERFICIE};
     color: {TEXTO};
+}}
+QTabBar::tab:hover:!selected {{
+    color: {TEXTO};
+}}
+/* Pasos del trabajo (panel izquierdo): barra de navegación con subrayado */
+QTabWidget#pasos::pane {{
+    border: none;
+    border-top: 1px solid {LINEA};
+    background: {MESA};
+}}
+QTabWidget#pasos > QTabBar::tab {{
+    background: transparent;
+    border: none;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    padding: 10px 12px 8px 12px;
+    margin: 0;
+}}
+QTabWidget#pasos > QTabBar::tab:selected {{
+    color: {EMULSION};
+    border-bottom: 3px solid {EMULSION};
 }}
 QSlider::groove:horizontal {{
     height: 4px;
@@ -208,13 +239,3 @@ QToolTip {{
     padding: 4px 6px;
 }}
 """
-
-
-def moire_style(nivel):
-    """Color del borde lateral y del texto del detector de moiré según el riesgo."""
-    return {
-        'CRITICO': ESTADO_RIESGO,
-        'ALTO': ESTADO_RIESGO,
-        'MEDIO': ESTADO_ALERTA,
-        'BAJO': ESTADO_OK,
-    }.get(nivel, TEXTO_SUAVE)

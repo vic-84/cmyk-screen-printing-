@@ -51,8 +51,6 @@ class DraggableChannelList(QtWidgets.QListWidget):
         self.orderChanged.emit(new_order)
 
 
-
-
 class ChannelScreenDelegate(QtWidgets.QStyledItemDelegate):
     """
     Pinta cada canal como una pantalla de la prensa: muestra de tinta, nombre y
@@ -191,16 +189,16 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
     Widget de vista previa con zoom interactivo y navegación con mouse.
     Reemplaza el AspectRatioPixmapLabel para la vista previa.
     """
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        
+
         # Configuración básica
         self.setWidgetResizable(True)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         self.setAlignment(QtCore.Qt.AlignCenter)
-        
+
         # Label interno para mostrar la imagen
         self.image_label = QtWidgets.QLabel()
         self.image_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -208,28 +206,28 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         self.viewport().setStyleSheet(f"background: {theme.GRIS_PREPRENSA};")
         self.image_label.setStyleSheet(f"background: {theme.GRIS_PREPRENSA};")
         self.setWidget(self.image_label)
-        
+
         # Variables de zoom
         self.zoom_factor = 1.0
         self.min_zoom = 0.1
         self.max_zoom = 10.0
         self.zoom_step = 0.1
-        
+
         # Imagen original
         self.original_pixmap = QtGui.QPixmap()
         self.mm_per_px = None
-        
+
         # Configurar eventos
         self.setMouseTracking(True)
         self.image_label.setMouseTracking(True)
-        
+
         # Variables para pan (arrastre)
         self.last_pan_point = QtCore.QPoint()
         self.is_panning = False
-        
+
         # Crear controles de zoom
         self.setup_zoom_controls()
-        
+
     def setup_zoom_controls(self):
         """Barra de zoom compacta superpuesta en la esquina superior derecha."""
         self.controls_widget = QtWidgets.QFrame(self)
@@ -240,7 +238,7 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
                 border: 1px solid {theme.LINEA};
                 border-radius: 3px;
             }}
-            QPushButton {{ padding: 0; min-height: 0; border-radius: 2px; }}
+            QPushButton {{ padding: 0 8px; min-height: 0; border-radius: 4px; }}
             QLabel {{ color: {theme.TEXTO_SUAVE}; font-size: 9pt; }}
         """)
 
@@ -277,21 +275,23 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         self.zoom_100_btn.clicked.connect(self.zoom_to_100)
         controls_layout.addWidget(self.zoom_100_btn)
 
+        for button in (self.zoom_fit_btn, self.zoom_100_btn):
+            button.setMinimumWidth(button.fontMetrics().horizontalAdvance(button.text()) + 36)
         self.controls_widget.adjustSize()
         self.position_controls()
-        
+
     def position_controls(self):
         """Posicionar controles en la esquina superior derecha"""
         parent_rect = self.rect()
         x = parent_rect.width() - self.controls_widget.width() - 10
         y = 10
         self.controls_widget.move(x, y)
-        
+
     def resizeEvent(self, event):
         """Reposicionar controles cuando cambia el tamaño"""
         super().resizeEvent(event)
         self.position_controls()
-        
+
     def setPixmap(self, pixmap, mm_per_px=None):
         """
         Nueva imagen. Solo se ajusta a la ventana con la primera imagen o si
@@ -313,26 +313,26 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
             # Manejar texto o imagen vacía
             self.original_pixmap = QtGui.QPixmap()
             self.image_label.setText(str(pixmap) if pixmap else "Sin imagen")
-            
+
     def update_display(self):
         """Actualizar la imagen mostrada con el zoom actual"""
         if self.original_pixmap.isNull():
             return
-            
+
         # Calcular nuevo tamaño
         new_size = self.original_pixmap.size() * self.zoom_factor
-        
+
         # Escalar imagen
         scaled_pixmap = self.original_pixmap.scaled(
             new_size,
             QtCore.Qt.KeepAspectRatio,
             QtCore.Qt.SmoothTransformation if self.zoom_factor < 2.0 else QtCore.Qt.FastTransformation
         )
-        
+
         # Mostrar imagen
         self.image_label.setPixmap(scaled_pixmap)
         self.image_label.resize(scaled_pixmap.size())
-        
+
         # El % es respecto al tamaño impreso: 100 % = lo que mide en la prenda
         real = self.real_size_zoom()
         self.zoom_label.setText(f"{self.zoom_factor / real:.0%}" if real else f"{self.zoom_factor:.0%}")
@@ -345,89 +345,89 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
         # sobre la pantalla no coincide, el monitor informa mal su tamaño
         screen_dpi = self.screen().physicalDotsPerInch()
         return screen_dpi / 25.4 * self.mm_per_px
-        
+
     def wheelEvent(self, event):
         """Zoom con rueda del mouse"""
         if event.modifiers() == QtCore.Qt.ControlModifier:
             # Zoom con Ctrl + rueda
             angle_delta = event.angleDelta().y()
             zoom_in = angle_delta > 0
-            
+
             # Obtener posición del mouse para zoom centrado
             mouse_pos = event.pos()
             self.zoom_at_point(mouse_pos, zoom_in)
-            
+
         else:
             # Scroll normal sin Ctrl
             super().wheelEvent(event)
-            
+
     def zoom_at_point(self, point, zoom_in):
         """Zoom centrado en un punto específico"""
         old_zoom = self.zoom_factor
-        
+
         # Calcular nuevo zoom
         if zoom_in:
             new_zoom = min(self.max_zoom, old_zoom * (1 + self.zoom_step))
         else:
             new_zoom = max(self.min_zoom, old_zoom * (1 - self.zoom_step))
-            
+
         if new_zoom == old_zoom:
             return
-            
+
         # Guardar posición del scroll
         h_scroll = self.horizontalScrollBar()
         v_scroll = self.verticalScrollBar()
-        
+
         old_h = h_scroll.value()
         old_v = v_scroll.value()
-        
+
         # Aplicar zoom
         self.zoom_factor = new_zoom
         self.update_display()
-        
+
         # Ajustar scroll para mantener punto bajo el mouse
         zoom_ratio = new_zoom / old_zoom
-        
+
         # Calcular nuevas posiciones de scroll
         new_h = int(old_h * zoom_ratio + (point.x() * (zoom_ratio - 1)))
         new_v = int(old_v * zoom_ratio + (point.y() * (zoom_ratio - 1)))
-        
+
         h_scroll.setValue(new_h)
         v_scroll.setValue(new_v)
-        
+
     def zoom_in(self):
         """Zoom in desde el centro"""
         center = self.rect().center()
         self.zoom_at_point(center, True)
-        
+
     def zoom_out(self):
         """Zoom out desde el centro"""
         center = self.rect().center()
         self.zoom_at_point(center, False)
-        
+
     def zoom_to_fit(self):
         """Ajustar imagen al tamaño del widget"""
         if self.original_pixmap.isNull():
             return
-            
+
         # Calcular factor de escala para ajustar
         widget_size = self.viewport().size()
         pixmap_size = self.original_pixmap.size()
-        
+
         scale_x = widget_size.width() / pixmap_size.width()
         scale_y = widget_size.height() / pixmap_size.height()
-        
+
         # Usar el menor para que quepa completo
         fit_zoom = min(scale_x, scale_y, 1.0)  # No ampliar más de 100%
-        
+
         self.zoom_factor = max(self.min_zoom, fit_zoom)
         self.update_display()
-        
+
     def zoom_to_100(self):
         """Zoom al tamaño impreso real (o 1:1 en píxeles si no se conoce la medida)."""
         self.zoom_factor = min(self.max_zoom, self.real_size_zoom() or 1.0)
         self.update_display()
-        
+
     def mousePressEvent(self, event):
         """Iniciar pan con clic del mouse"""
         if event.button() == QtCore.Qt.LeftButton:
@@ -435,30 +435,30 @@ class ZoomablePreviewLabel(QtWidgets.QScrollArea):
             self.last_pan_point = event.pos()
             self.setCursor(QtCore.Qt.ClosedHandCursor)
         super().mousePressEvent(event)
-        
+
     def mouseMoveEvent(self, event):
         """Pan (arrastre) de la imagen"""
         if self.is_panning:
             # Calcular desplazamiento
             delta = event.pos() - self.last_pan_point
             self.last_pan_point = event.pos()
-            
+
             # Aplicar desplazamiento a las barras de scroll
             h_scroll = self.horizontalScrollBar()
             v_scroll = self.verticalScrollBar()
-            
+
             h_scroll.setValue(h_scroll.value() - delta.x())
             v_scroll.setValue(v_scroll.value() - delta.y())
-            
+
         super().mouseMoveEvent(event)
-        
+
     def mouseReleaseEvent(self, event):
         """Finalizar pan"""
         if event.button() == QtCore.Qt.LeftButton:
             self.is_panning = False
             self.setCursor(QtCore.Qt.ArrowCursor)
         super().mouseReleaseEvent(event)
-        
+
 
 # =====================================================================
 # == CLASE PRINCIPAL DE LA APLICACIÓN
@@ -480,7 +480,7 @@ def print_films(printer, films, dpi):
 
 
 class SimpleHalftoneApp(QtWidgets.QMainWindow):
-    
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Asistente de Serigrafía Profesional")
@@ -505,7 +505,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.is_preview_updating = False
         self._guide_plan_cache = None
         self.current_channel = None
-        
+
         # Timer para umbrales
         self.threshold_timer = QtCore.QTimer()
         self.threshold_timer.setSingleShot(True)
@@ -568,17 +568,35 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(0)
 
-        controls_scroll = QtWidgets.QScrollArea()
-        controls_scroll.setObjectName("panelControles")
-        controls_scroll.setWidgetResizable(True)
-        controls_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        # Un paso del trabajo por pestaña: no hay que bajar por todo el panel
+        # para llegar a los canales, que es lo que más se retoca
+        self.step_tabs = QtWidgets.QTabWidget()
+        self.step_tabs.setObjectName("pasos")
+        self.step_tabs.setDocumentMode(True)
 
-        controls_container = QtWidgets.QWidget()
-        controls_container.setObjectName("contenedorControles")
-        controls_layout = QtWidgets.QVBoxLayout(controls_container)
-        controls_layout.setAlignment(QtCore.Qt.AlignTop)
-        controls_layout.setSpacing(4)
-        controls_layout.setContentsMargins(10, 4, 10, 10)
+        def step_page(title, tooltip):
+            scroll = QtWidgets.QScrollArea()
+            scroll.setObjectName("panelControles")
+            scroll.setWidgetResizable(True)
+            scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+            container = QtWidgets.QWidget()
+            container.setObjectName("contenedorControles")
+            page = QtWidgets.QVBoxLayout(container)
+            page.setSpacing(10)
+            page.setContentsMargins(12, 8, 12, 12)
+            scroll.setWidget(container)
+            self.step_tabs.addTab(scroll, title)
+            self.step_tabs.setTabToolTip(self.step_tabs.count() - 1, tooltip)
+            step_pages.append(page)
+            return page
+
+        step_pages = []
+        self.step_tabs.tabBar().setExpanding(True)
+
+        design_page = step_page("Diseño", "Imagen, prenda y tinta")
+        separation_page = step_page("Separación", "Trama, colores planos, tono y gestión de color")
+        channels_page = step_page("Canales", "Orden, color, umbral y curva de cada tinta")
+        output_page = step_page("Salida", "Película, tamaño, guías y archivo")
 
         # === IMAGEN ===
         def compact_combo(combo):
@@ -629,7 +647,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         image_layout.addWidget(self.image_res_label)
         self.complexity_label = secondary_label("")
         image_layout.addWidget(self.complexity_label)
-        controls_layout.addWidget(image_group)
+        design_page.addWidget(image_group)
 
         # === TRAMA ===
         params_group = QtWidgets.QGroupBox("Trama")
@@ -687,7 +705,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.resolution_combo = compact_combo(QtWidgets.QComboBox())
         self.resolution_combo.addItems(list(RESOLUTION_ENHANCEMENT.keys()))
         params_layout.addWidget(self.resolution_combo, 6, 1, 1, 2)
-        controls_layout.addWidget(params_group)
+        separation_page.addWidget(params_group)
 
         # === COLOR PLANO ===
         self.spot_group = QtWidgets.QGroupBox("Color plano")
@@ -797,7 +815,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.spot_library_label = secondary_label("Sin biblioteca de color cargada.")
         spot_layout.addWidget(self.spot_library_label)
         self.spot_group.setVisible(False)
-        controls_layout.addWidget(self.spot_group)
+        separation_page.addWidget(self.spot_group)
 
         # === TONO ===
         tone_group = QtWidgets.QGroupBox("Tono")
@@ -835,7 +853,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         tone_layout.addWidget(self.gain_curve_btn, 2, 2)
         self.tone_hint = secondary_label("Referencia textil: punto mínimo 5–10 %, máximo 85–95 %, ganancia 15–30 %.")
         tone_layout.addWidget(self.tone_hint, 3, 0, 1, 3)
-        controls_layout.addWidget(tone_group)
+        separation_page.addWidget(tone_group)
 
         # === SUSTRATO ===
         substrate_group = QtWidgets.QGroupBox("Sustrato y tinta")
@@ -912,7 +930,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         for control in (self.garment_black_cb, self.white_base_cb):
             control.stateChanged.connect(self.on_garment_black_changed)
         self.garment_black_spin.valueChanged.connect(self.schedule_reseparation)
-        controls_layout.addWidget(substrate_group)
+        design_page.addWidget(substrate_group)
 
         # === GESTIÓN DE COLOR ===
         color_group = QtWidgets.QGroupBox("Gestión de color")
@@ -952,7 +970,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         color_layout.addLayout(profile_buttons, 5, 0, 1, 3)
         self.icc_info_label = secondary_label("")
         color_layout.addWidget(self.icc_info_label, 6, 0, 1, 3)
-        controls_layout.addWidget(color_group)
+        separation_page.addWidget(color_group)
 
         # === SALIDA ===
         # Tres bloques en el orden en que se decide: el lienzo (la película),
@@ -1112,7 +1130,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         film_options.addWidget(self.cmyk_composite_cb, 1, 1)
         out.addLayout(film_options, row, 0, 1, 2)
         row += 1
-        controls_layout.addWidget(format_group)
+        output_page.addWidget(format_group)
 
         # === CANALES ===
         channels_group = QtWidgets.QGroupBox("Canales")
@@ -1314,11 +1332,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         for i in (1, 2):
             channels_tabs.setTabVisible(i, False)
         channels_layout.addWidget(advanced_cb)
-        controls_layout.addWidget(channels_group)
-        controls_layout.addStretch()
-
-        controls_scroll.setWidget(controls_container)
-        left_layout.addWidget(controls_scroll, 1)
+        channels_page.addWidget(channels_group)
+        for page in step_pages:
+            page.addStretch(1)      # las cajas quedan arriba, sin estirarse
+        left_layout.addWidget(self.step_tabs, 1)
 
         # Barra de acciones fija
         actions_bar = QtWidgets.QWidget()
@@ -1548,16 +1565,10 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             item.setToolTip(f"{self.channel_display_name(ch)}: arrastra o usa ▲ ▼ para cambiar el orden de "
                             "impresión; doble clic para cambiar su color")
             self.channel_list.addItem(item)
+            # Rehacer la lista no debe perder el canal que se estaba editando
+            item.setSelected(ch == self.current_channel)
         self.channel_list.blockSignals(False)
-
-
-
-    
-    
-
-
-
-
+        self.on_channel_selection_changed()
 
     def show_setup_wizard(self):
         """Muestra un diálogo para guiar al usuario en la configuración del trabajo."""
@@ -1596,7 +1607,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
         # Carga inicial de las recomendaciones
         self.update_recommendations(soporte_combo, color_soporte_combo, result_label)
-        
+
         dialog.exec_()
 
     def update_recommendations(self, soporte_combo, color_soporte_combo, result_label):
@@ -1679,11 +1690,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         return CMYK_ANGLES.get(channel)
 
     def list_channels(self):
-        """Canales que muestra la lista: tintas de la técnica actual + base blanca."""
-        settings = self.job_settings()
-        visible = settings.ink_channels() + ['W']
-        ordered = [c for c in self.channel_order if c in visible]
-        return ordered + [c for c in visible if c not in ordered]
+        """Canales que muestra la lista: los que se imprimen (la base solo con «Imprimir base»)."""
+        return self.job_settings().channels()
 
     def channel_display_name(self, channel):
         spot = next((sp for sp in self.spot_colors if sp['id'] == channel), None)
@@ -1695,8 +1703,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
     def select_garment_color(self):
         """Permite al usuario seleccionar el color de fondo para la simulación."""
-        color = QtWidgets.QColorDialog.getColor(self.garment_color, self)
-        if color.isValid():
+        def preview(color):
+            self.garment_color = QtGui.QColor(color)
+            self.update_preview()
+        color = self.pick_color_live(QtGui.QColor(self.garment_color), "Color de la prenda", preview)
+        if color:
             self.garment_color = color
             self.garment_color_btn.setText(f"Color de la prenda: {color.name().upper()}")
             if self.spot_colors:
@@ -1813,7 +1824,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.complexity_label.setText(message)
         self.complexity_label.setStyleSheet(f"color: {color}; font-size: 9pt;")
 
-    
     def load_databases(self):
         """Carga las bases de datos de tintas y racletas (JSON en src/data)."""
         data_dir = os.path.join(os.path.dirname(__file__), '..', 'data')
@@ -1839,7 +1849,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
     def set_base(self, name, rgb):
         """Selecciona la base por nombre (o la deja personalizada con su color)."""
         self.base_rgb = [int(v) for v in rgb]
-        index = self.base_combo.findText(name)
+        index = self.base_combo.findText(name) if name else -1
         self.base_combo.setCurrentIndex(index if index >= 0 else self.base_combo.count() - 1)
         self.channel_colors['W'] = QtGui.QColor(*self.base_rgb)
         self.channel_list.viewport().update()
@@ -1847,8 +1857,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
     def on_base_changed(self, *_):
         rgb = self.base_combo.currentData()
         if rgb is None:
-            color = QtWidgets.QColorDialog.getColor(QtGui.QColor(*self.base_rgb), self, "Color de la base")
-            if not color.isValid():
+            color = self.pick_color_live(QtGui.QColor(*self.base_rgb), "Color de la base",
+                                         lambda c: self.preview_channel_color('W', c))
+            if not color:
                 return
             rgb = list(color.getRgb()[:3])
         self.set_base(self.base_combo.currentText(), rgb)
@@ -2255,9 +2266,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
     def set_lpi(self, lpi):
         self.lpi_combo.setCurrentText(f"{lpi:g} LPI")
 
-
-
-
     def setup_dimension_spinbox(self, spinbox, unit):
         """Configurar spinbox según la unidad seleccionada"""
         unit_info = MEASUREMENT_UNITS[unit]
@@ -2315,7 +2323,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             bytes_per_line = ch * w
             qt_img = QtGui.QImage(rgb_img.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
             self.original_label.setPixmap(QtGui.QPixmap.fromImage(qt_img))
-            
+
             # La información ya está calculada y guardada, solo la mostramos.
             info = self.image_info
             res_text = f"{info['width_px']}×{info['height_px']}px, {info['dpi_x']:.0f} DPI, {info['width_cm']:.1f}×{info['height_cm']:.1f}cm"
@@ -2334,15 +2342,44 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self._regenerate_single_halftone(self.current_channel)
             self.update_preview()
 
+    def pick_color_live(self, initial, title, preview):
+        """
+        Diálogo de color que se ve en la simulación mientras se elige, sin dar OK.
+        preview(color) se llama con cada color (y con el inicial si se cancela).
+        Devuelve el color aceptado o None.
+        """
+        dialog = QtWidgets.QColorDialog(initial, self)
+        dialog.setWindowTitle(title)
+        pending = [initial]
+        timer = QtCore.QTimer(dialog)
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: preview(pending[-1]))
+        # Se agrupan los cambios seguidos (arrastrar por el cuadro) en un solo redibujo
+        dialog.currentColorChanged.connect(lambda color: (pending.append(QtGui.QColor(color)), timer.start(60)))
+        accepted = dialog.exec_() == QtWidgets.QDialog.Accepted
+        timer.stop()
+        color = dialog.selectedColor() if accepted else initial
+        preview(color)
+        return color if accepted and color.isValid() else None
+
+    def preview_channel_color(self, channel, color):
+        self.channel_colors[channel] = QtGui.QColor(color)
+        self.channel_list.viewport().update()
+        self.update_preview()
 
     def pick_channel_color(self, channel):
-        """Abre el diálogo de color y actualiza el color de simulación del canal."""
+        """Abre el diálogo de color; la simulación muestra el color mientras se elige."""
         if channel not in self.channel_colors:
             return
-        color = QtWidgets.QColorDialog.getColor(self.channel_colors[channel], self,
-                                                f"Color de {self.channel_display_name(channel).lower()}")
-        if color.isValid():
-            self.channel_colors[channel] = color
+        color = self.pick_color_live(QtGui.QColor(self.channel_colors[channel]),
+                                     f"Color de {self.channel_display_name(channel).lower()}",
+                                     lambda c: self.preview_channel_color(channel, c))
+        if color:
+            if channel == 'W':
+                # La base tiene un solo color: el del combo Base (también se exporta)
+                self.set_base(None, color.getRgb()[:3])
+            else:
+                self.channel_colors[channel] = color
             self.update_channel_list_ui()
             self.update_preview()
 
@@ -2519,14 +2556,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         """Celda, forma y ángulos actuales (en píxeles del positivo)."""
         settings = self.job_settings()
         return settings.cell_px, settings.dot_shape, dict(settings.angles)
-    
+
     def reset_all_to_defaults(self):
         """Resetea las variables de la aplicación a sus valores iniciales."""
         self.channel_colors = self.PURE_CMYK_COLORS.copy()
         self.channel_thresholds = self.PURE_DEFAULT_THRESHOLDS.copy()
         self.garment_color = QtGui.QColor("#FFFFFF")
-
-    
 
     def generate_single_channel_preview(self, channel_name):
         """Un solo canal: sus puntos con el color de la tinta sobre la prenda."""
@@ -2691,9 +2726,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         parts.append(f"vista previa al {self.preview_scale:.0%}")
         self.status_bar.showMessage("Separado: " + "; ".join(parts) + ".")
 
-
-
-        
     def show_channel_curve(self, channel):
         """Pone en los deslizadores la curva de color del canal seleccionado."""
         self.curve_box.setEnabled(channel is not None)
@@ -2730,9 +2762,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         selecciona un solo canal.
         """
         selected_items = self.channel_list.selectedItems()
-        
+
         is_single_selection = len(selected_items) == 1
-        
+
         self.threshold_slider.setEnabled(is_single_selection)
         self.view_individual_channel_cb.setEnabled(is_single_selection)
         movable = is_single_selection and selected_items[0].text() != 'W'
@@ -2756,14 +2788,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.show_channel_curve(None)
             # Si no hay un solo canal seleccionado, forzamos la vista de composición
             self.view_individual_channel_cb.setChecked(False)
-            
+
         self.update_preview()
-
-
-                
-
-
-        
 
     def generate_dot_gain_template(self):
         """
@@ -2890,12 +2916,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         _, screens, _ = render(self.image, self.image_alpha, settings, preview=False)
         films, _ = output.finish_positives(screens, settings)
         return [films[ch] for ch in settings.channels()]
-
-
-
-
-
-
 
     def save_results(self):
         """
@@ -3044,10 +3064,6 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             for name in saved_files:
                 f.write(f"  {name}\n")
 
-
-
-
-
     def process_cmyk(self):
         """
         Separa y trama la vista previa. Trabaja a resolución reducida (misma
@@ -3070,7 +3086,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "No se pudo separar", str(e))
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
-    
+
 
 # Malla y lineatura: franja de estado y diálogo (reglas de core/mesh.py)
 

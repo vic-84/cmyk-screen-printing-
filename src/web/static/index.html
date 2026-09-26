@@ -1,0 +1,539 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ccircle cx='5' cy='5' r='3' fill='%2300AEEF'/%3E%3Ccircle cx='11' cy='5' r='3' fill='%23EC008C'/%3E%3Ccircle cx='5' cy='11' r='3' fill='%23FFF200'/%3E%3Ccircle cx='11' cy='11' r='3' fill='%23231F20'/%3E%3C/svg%3E">
+<title>Separador de color para serigrafía</title>
+<style>
+  :root {
+    --mesa: #DADDDB; --superficie: #F3F4F2; --texto: #1E2427; --suave: #5B6569;
+    --linea: #B8BEBD; --emulsion: #2F4690; --emulsion-oscura: #233670; --preprensa: #80827F;
+    --ok: #2E6B45; --alerta: #9A6414; --riesgo: #A3261D;
+    font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-size: 14px; color: var(--texto);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--mesa); min-height: 100vh; }
+  button, input, select { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--emulsion); outline-offset: 1px; }
+
+  .app { display: grid; grid-template-columns: 380px 1fr; height: 100vh; }
+  .panel { display: flex; flex-direction: column; border-right: 1px solid var(--linea); min-height: 0; }
+  .controls { overflow-y: auto; padding: 8px 12px 16px; flex: 1; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 12px;
+             background: var(--superficie); border-top: 1px solid var(--linea); }
+
+  fieldset { background: var(--superficie); border: 1px solid var(--linea); border-radius: 3px;
+             margin: 14px 0 0; padding: 10px; }
+  legend { font-weight: 600; padding: 0 4px; background: var(--mesa); }
+  h3.sub { font-size: 12px; font-weight: 600; color: var(--suave); margin: 10px 0 6px;
+           padding-bottom: 2px; border-bottom: 1px solid var(--linea); }
+  h3.sub:first-of-type { margin-top: 2px; }
+  :disabled { opacity: .55; }
+  .row { display: grid; grid-template-columns: 118px 1fr auto; gap: 8px; align-items: center; margin: 6px 0; }
+  .row > label { color: var(--suave); }
+  .row .span2 { grid-column: 2 / 4; }
+  .checks { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px; margin: 8px 0 2px; }
+  .checks label { display: flex; gap: 6px; align-items: center; }
+  input[type=number], select, input[type=text] { width: 100%; background: white; border: 1px solid var(--linea);
+             border-radius: 3px; padding: 4px 6px; min-height: 28px; }
+  input[type=color] { width: 44px; height: 28px; border: 1px solid var(--linea); border-radius: 3px; padding: 1px; background: white; }
+  button { background: white; border: 1px solid var(--linea); border-radius: 3px; padding: 5px 10px; cursor: pointer; min-height: 28px; }
+  button:hover { border-color: var(--suave); }
+  button:disabled { color: var(--suave); background: var(--superficie); cursor: default; }
+  button.primary { background: var(--emulsion); border-color: var(--emulsion-oscura); color: white; font-weight: 600; min-height: 34px; }
+  button.primary:hover { background: var(--emulsion-oscura); }
+  button.secondary { font-weight: 600; min-height: 34px; }
+  .hint { color: var(--suave); font-size: 12.5px; margin: 6px 0 0; line-height: 1.4; }
+
+  .drop { border: 1px dashed var(--suave); border-radius: 3px; padding: 14px; text-align: center; cursor: pointer; background: white; }
+  .drop.over { border-color: var(--emulsion); background: #E8ECF6; }
+  .drop strong { display: block; margin-bottom: 2px; }
+  .thumb { width: 100%; max-height: 180px; object-fit: contain; margin-top: 8px; background: var(--preprensa);
+           border-radius: 2px; display: none; }
+
+  .verdict { border: 1px solid var(--linea); border-left: 4px solid var(--suave); background: white;
+             border-radius: 3px; padding: 6px 8px; margin: 6px 0; }
+  .verdict b { display: block; }
+  .verdict.ok { border-left-color: var(--ok); } .verdict.ok b { color: var(--ok); }
+  .verdict.aviso { border-left-color: var(--alerta); } .verdict.aviso b { color: var(--alerta); }
+  .verdict.riesgo { border-left-color: var(--riesgo); } .verdict.riesgo b { color: var(--riesgo); }
+
+  .spots { width: 100%; border-collapse: collapse; margin-top: 6px; background: white; }
+  .spots td, .spots th { border-bottom: 1px solid var(--linea); padding: 4px; text-align: center; font-weight: normal; }
+  .spots th { color: var(--suave); font-size: 12px; }
+  .spots td:nth-child(2) { text-align: left; }
+  .spots input[type=text] { border: none; padding: 2px; min-height: 0; }
+  .swatch { width: 26px; height: 18px; border: 1px solid var(--suave); border-radius: 2px; display: inline-block; vertical-align: middle; }
+
+  .stage { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 8px 12px 12px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 4px 0 8px; }
+  .toolbar label { display: flex; gap: 6px; align-items: center; color: var(--suave); }
+  .toolbar select, .toolbar input[type=number] { width: auto; }
+  .viewport { flex: 1; min-height: 300px; background: var(--preprensa); border: 1px solid var(--linea);
+              display: grid; place-items: center; overflow: auto; position: relative; }
+  .viewport img { display: none; position: absolute; inset: 10px; width: calc(100% - 20px);
+                  height: calc(100% - 20px); object-fit: contain; }
+  /* Tamaño real: un píxel de la vista previa por píxel de pantalla, para revisar los puntos */
+  .viewport img.actual { position: static; width: auto; height: auto; max-width: none; image-rendering: pixelated; }
+  .viewport.actual { place-items: start; }
+  .empty { color: var(--superficie); text-align: center; line-height: 1.5; }
+  .busy { position: absolute; top: 10px; right: 10px; background: var(--superficie); border: 1px solid var(--linea);
+          border-radius: 3px; padding: 4px 10px; color: var(--suave); display: none; }
+
+  /* Pantallas de la prensa: el orden de impresión como pila de marcos */
+  .screens { display: flex; gap: 6px; overflow-x: auto; padding: 8px 0 2px; }
+  .screen { flex: 0 0 auto; display: flex; align-items: center; gap: 8px; background: white; border: 1px solid var(--linea);
+            border-radius: 3px; padding: 5px 10px 5px 6px; cursor: pointer; }
+  .screen .n { color: var(--suave); font-variant-numeric: tabular-nums; min-width: 1.5em; text-align: right; }
+  .screen .ink { width: 30px; height: 20px; border: 1px solid var(--suave); border-radius: 2px; }
+  .screen .a { color: var(--suave); font-variant-numeric: tabular-nums; }
+  .screen.on { border-color: var(--emulsion); box-shadow: inset 3px 0 0 var(--emulsion); }
+  .status { color: var(--suave); padding-top: 6px; min-height: 1.4em; font-variant-numeric: tabular-nums; }
+  .error { color: var(--riesgo); }
+
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; height: auto; }
+    .panel { border-right: none; }
+    .controls { overflow: visible; }
+    .actions { position: sticky; bottom: 0; }
+    .viewport { min-height: 60vh; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <section class="panel" aria-label="Ajustes del trabajo">
+    <div class="controls">
+      <fieldset>
+        <legend>Imagen</legend>
+        <div class="drop" id="drop" tabindex="0" role="button" aria-label="Abrir imagen o documento">
+          <strong>Abrir imagen o documento</strong>
+          <span class="hint">PNG, JPG, TIFF, PSD, PDF, AI, SVG o EPS. También puedes arrastrarlo aquí.</span>
+        </div>
+        <input type="file" id="file" hidden accept=".png,.jpg,.jpeg,.tif,.tiff,.bmp,.webp,.psd,.psb,.pdf,.ai,.svg,.eps">
+        <img class="thumb" id="thumb" alt="Imagen original">
+        <div class="row"><label for="denoise">Limpiar ruido</label><select id="denoise" class="span2">
+          <option value="off">No</option><option value="light">Suave</option><option value="strong">Fuerte</option></select></div>
+        <div class="row"><label for="sharpen">Enfoque</label><input type="number" id="sharpen" value="0" min="0" max="150"><span class="hint">%</span></div>
+        <div class="checks"><label><input type="checkbox" id="smoothEdges" checked> Suavizar bordes de tintas sólidas</label></div>
+        <p class="hint" id="info"></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Trama</legend>
+        <div class="row"><label for="mode">Técnica</label><select id="mode" class="span2"></select></div>
+        <div class="row"><label for="mesh">Malla</label><input type="number" id="mesh" value="120" min="10" max="500">
+          <select id="meshUnit" aria-label="Unidad de malla"><option value="in">hilos/pulg</option><option value="cm">hilos/cm</option></select></div>
+        <div class="row"><label for="lpi">Lineatura</label><input type="number" id="lpi" value="29" min="5" max="200" step="1">
+          <button id="suggest" title="Malla ÷ 3.5 a 4.75, sin relación entera">Sugerida</button></div>
+        <div class="verdict" id="meshVerdict"><b>—</b><span class="hint"></span></div>
+        <div class="row"><label for="shape">Forma de punto</label><select id="shape" class="span2"></select></div>
+        <div class="row"><label for="angles">Ángulos</label><select id="angles" class="span2"></select></div>
+      </fieldset>
+
+      <fieldset id="spotBox" hidden>
+        <legend id="spotLegend">Color plano</legend>
+        <div class="row"><label for="spotCount">Colores</label><input type="number" id="spotCount" value="6" min="1" max="16">
+          <button id="detect">Detectar</button></div>
+        <table class="spots" id="spotTable" aria-label="Tintas">
+          <thead><tr><th></th><th>Tinta</th><th>Semitono</th><th>Cubriente</th><th>Base</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="row"><label for="trap">Trapping</label><input type="number" id="trap" value="0" min="0" max="2" step="0.05"><span class="hint">mm</span></div>
+        <div class="row"><label for="despeckle">Limpiar motas</label><input type="number" id="despeckle" value="0.25" min="0" max="2" step="0.05"><span class="hint">mm</span></div>
+        <div class="row"><label for="tolerance">Alcance del plano</label><input type="number" id="tolerance" value="10" min="2" max="40"><span class="hint">ΔE</span></div>
+        <div class="row"><label for="indexRes">Resolución índice</label><input type="number" id="indexRes" value="150" min="50" max="400"><span class="hint">ppp</span></div>
+        <div class="row"><label for="library">Biblioteca</label><input type="file" id="library" class="span2" accept=".ase,.csv,.txt" title="ASE o CSV (nombre,#RRGGBB)"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Tono</legend>
+        <div class="row"><label for="minDot">Punto mínimo</label><input type="number" id="minDot" value="0" min="0" max="50"><button id="holdLimits" title="Rango que la malla sostiene con esta lineatura">Según malla</button></div>
+        <div class="row"><label for="maxDot">Punto máximo</label><input type="number" id="maxDot" value="100" min="50" max="100"><span class="hint">%</span></div>
+        <div class="row"><label for="gain">Ganancia al 50 %</label><input type="number" id="gain" value="0" min="0" max="45"><span class="hint">puntos</span></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Sustrato y tinta</legend>
+        <div class="row"><label for="substrate">Sustrato</label><select id="substrate" class="span2"></select></div>
+        <div class="row"><label for="garment">Color de prenda</label><input type="color" id="garment" value="#ffffff"><span></span></div>
+        <div class="row"><label for="inkType">Tinta</label><select id="inkType" class="span2"></select></div>
+        <div class="row"><label for="inkLimit">Límite de tinta</label><input type="number" id="inkLimit" value="260" min="100" max="400"><span class="hint">%</span></div>
+        <div class="row"><label for="base">Base</label><select id="base"></select><input type="color" id="baseColor" value="#ffffff" title="Color de la base"></div>
+        <div class="checks"><label><input type="checkbox" id="whiteBase"> Imprimir base bajo el color</label></div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Gestión de color</legend>
+        <div class="row"><label for="iccProfile">Separación CMYK</label><select id="iccProfile" class="span2"
+          title="Con un perfil ICC la separación la define el perfil: úsalo cuando la marca exija su perfil"></select></div>
+        <div class="row"><label for="iccIntent">Intento</label><select id="iccIntent" class="span2"></select></div>
+        <div class="row"><label for="inputProfile">Imágenes sin perfil</label><select id="inputProfile" class="span2"></select></div>
+        <div class="checks">
+          <label><input type="checkbox" id="iccBpc" checked> Compensar punto negro</label>
+          <label><input type="checkbox" id="iccLimit"> Aplicar límite de tinta</label>
+        </div>
+        <div class="row"><label for="iccUpload">Importar perfil</label><input type="file" id="iccUpload" class="span2" accept=".icc,.icm"></div>
+        <p class="hint" id="iccInfo"></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Salida</legend>
+        <h3 class="sub">Lienzo</h3>
+        <div class="row"><label for="paper">Formato</label><select id="paper" class="span2"
+          title="Medida de la película. El diseño se coloca dentro y nunca se corta"></select></div>
+        <div class="row" id="customRow" hidden><label for="customW">Medida (mm)</label>
+          <input type="number" id="customW" value="300" min="10" max="2000" step="0.5" aria-label="Ancho en mm">
+          <input type="number" id="customH" value="400" min="10" max="2000" step="0.5" aria-label="Alto en mm"></div>
+        <div class="row"><label for="dpi">Resolución</label><select id="dpi" class="span2">
+          <option>300</option><option>600</option><option>720</option><option>1200</option></select></div>
+
+        <h3 class="sub">Diseño en el lienzo</h3>
+        <div class="row"><label for="placement">Imagen</label><select id="placement" class="span2"
+          title="Ajustar: llena el área útil. Tamaño real: según los DPI de la imagen. Si no cabe, se reduce; nunca se corta">
+          <option value="fit">Ajustar al lienzo</option><option value="real">Tamaño real</option>
+          <option value="width">Ancho del diseño</option></select></div>
+        <div class="row" id="designWidthRow" hidden><label for="designWidth">Ancho (mm)</label>
+          <input type="number" id="designWidth" class="span2" value="280" min="10" max="2000" step="0.5"></div>
+        <div class="row"><label for="align">Posición</label><select id="align" class="span2">
+          <option value="center">Centrada</option><option value="top">Arriba al centro</option></select></div>
+        <div class="row"><label for="distress">Desgaste (mm)</label>
+          <input type="number" id="distress" class="span2" value="0" min="0" max="80" step="1"
+            title="Rompe el borde del diseño para que no quede cuadrado; 0 = sin desgaste"></div>
+
+        <h3 class="sub">Guías y película</h3>
+        <div class="checks"><label><input type="checkbox" id="guides" checked> Guías de registro</label></div>
+        <div class="row"><label for="guidePos">Colocación</label><select id="guidePos" class="span2"
+          title="En margen: el diseño se reduce. En espacios en blanco: las guías van donde no hay tinta. Automática: en blanco si hay borde desgastado">
+          <option value="auto">Automática</option><option value="margin">En margen</option>
+          <option value="blank">En espacios en blanco</option></select></div>
+        <div class="row"><label for="guideMargin">Margen (mm)</label>
+          <input type="number" id="guideMargin" class="span2" value="15" min="5" max="50" step="0.5"></div>
+        <div class="row"><label for="format">Archivo</label><select id="format" class="span2">
+          <option value="png">PNG</option><option value="tiff">TIFF 1 bit (RIP)</option></select></div>
+        <div class="checks">
+          <label><input type="checkbox" id="strip" checked> Tira de control</label>
+          <label><input type="checkbox" id="mirror"> Espejo</label>
+          <label><input type="checkbox" id="negative"> Negativo</label>
+        </div>
+      </fieldset>
+    </div>
+    <div class="actions">
+      <button class="primary" id="separate" disabled>Separar colores</button>
+      <button class="secondary" id="export" disabled>Exportar positivos</button>
+    </div>
+  </section>
+
+  <main class="stage">
+    <div class="toolbar">
+      <label>Ver <select id="view">
+        <option value="print">Impreso</option><option value="tac">Tinta total</option>
+        <option value="dots">Puntos en riesgo</option><option value="registration">Prueba de calce</option>
+        <option value="proof">Prueba de color ICC</option></select></label>
+      <label id="misregBox" hidden>Descalce <input type="number" id="misreg" value="0.3" min="0.05" max="2" step="0.05"> mm</label>
+      <label><input type="checkbox" id="actual"> Tamaño real (ver la trama)</label>
+      <span class="hint" id="stepLabel"></span>
+    </div>
+    <div class="viewport" id="viewport">
+      <div class="empty" id="empty">Abre una imagen para ver la simulación de impresión.</div>
+      <img id="preview" alt="Simulación de impresión">
+      <div class="busy" id="busy">Calculando…</div>
+    </div>
+    <div class="screens" id="screens" aria-label="Pantallas en orden de impresión"></div>
+    <div class="status" id="status" role="status"></div>
+  </main>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { docId: null, options: null, spots: [], steps: -1, dpi: 300 };
+
+function hexToRgb(hex) { const v = parseInt(hex.slice(1), 16); return [v >> 16 & 255, v >> 8 & 255, v & 255]; }
+function rgbToHex(rgb) { return "#" + rgb.map(v => v.toString(16).padStart(2, "0")).join(""); }
+function meshTpi() { const v = +$("mesh").value; return $("meshUnit").value === "cm" ? v * 2.54 : v; }
+function setStatus(text, isError) { $("status").textContent = text; $("status").className = "status" + (isError ? " error" : ""); }
+
+function fillSelect(select, entries, selected) {
+  select.innerHTML = "";
+  for (const [label, value] of entries) {
+    const option = new Option(label, value);
+    if (value === selected || label === selected) option.selected = true;
+    select.add(option);
+  }
+}
+
+function currentSettings() {
+  const o = state.options, custom = $("paper").value === "Personalizado";
+  const [pw, ph] = custom ? [+$("customW").value, +$("customH").value] : o.papers[$("paper").value];
+  const mode = $("mode").value;
+  return {
+    mode, mesh_tpi: meshTpi(), mesh_unit: $("meshUnit").value, lpi: +$("lpi").value,
+    dot_shape: $("shape").value, angle_preset: $("angles").value,
+    angles: o.angle_presets[$("angles").value] || o.default_angles,
+    min_dot: +$("minDot").value, max_dot: +$("maxDot").value, dot_gain: +$("gain").value,
+    dpi: +$("dpi").value, paper_width_mm: pw, paper_height_mm: ph,
+    placement: $("placement").value, design_width_mm: +$("designWidth").value, align: $("align").value,
+    distress_mm: +$("distress").value, guide_position: $("guidePos").value, guide_margin_mm: +$("guideMargin").value,
+    registration_guides: $("guides").checked,
+    control_strip: $("strip").checked, mirror: $("mirror").checked, negative: $("negative").checked,
+    output_format: $("format").value, ink_limit: +$("inkLimit").value, ink_type: $("inkType").value,
+    substrate: $("substrate").value, white_base: $("whiteBase").checked,
+    base_name: $("base").value === "custom" ? "Base " + $("baseColor").value.toUpperCase() : $("base").value,
+    base_rgb: hexToRgb($("baseColor").value),
+    denoise: $("denoise").value, sharpen: +$("sharpen").value, smooth_edges: $("smoothEdges").checked,
+    garment_rgb: hexToRgb($("garment").value), spot_colors: state.spots,
+    icc_profile: $("iccProfile").value, icc_intent: $("iccIntent").value, icc_bpc: $("iccBpc").checked,
+    icc_ink_limit: $("iccLimit").checked, input_profile: $("inputProfile").value,
+    trap_mm: +$("trap").value, despeckle_mm: +$("despeckle").value, spot_tolerance: +$("tolerance").value, index_resolution: +$("indexRes").value,
+    channel_order: ["W", "Y", "C", "M", "K", ...state.spots.map(s => s.id)],
+  };
+}
+
+async function api(path, fields) {
+  const form = new FormData();
+  for (const [key, value] of Object.entries(fields)) form.append(key, value);
+  const response = await fetch(path, { method: "POST", body: form });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({ detail: response.statusText }));
+    throw new Error(detail.detail || response.statusText);
+  }
+  return response;
+}
+
+async function checkMesh() {
+  const lpi = +$("lpi").value, mesh = meshTpi();
+  if (!(lpi > 0 && mesh > 0)) return;
+  const r = await (await fetch(`/api/mesh?mesh_tpi=${mesh}&lpi=${lpi}`)).json();
+  const titles = { ok: "Malla y lineatura compatibles", aviso: "Revisa la lineatura", riesgo: "Malla muy abierta para esta lineatura" };
+  $("meshVerdict").className = "verdict " + r.level;
+  $("meshVerdict").innerHTML = `<b>${titles[r.level]}</b><span class="hint">${r.message} Recomendado: ${r.range[0].toFixed(0)}–${r.range[1].toFixed(0)} LPI.</span>`;
+  state.mesh = r;
+}
+
+function renderSpots() {
+  const mode = $("mode").value;
+  const box = $("spotBox"), paletteModes = ["spot", "index", "cmyk_spot"];
+  box.hidden = !paletteModes.includes(mode);
+  $("spotLegend").textContent = { index: "Color índice", cmyk_spot: "Tintas planas adicionales" }[mode] || "Color plano";
+  $("tolerance").closest(".row").hidden = mode !== "cmyk_spot";
+  $("indexRes").closest(".row").hidden = mode !== "index";
+  const body = $("spotTable").querySelector("tbody");
+  body.innerHTML = "";
+  state.spots.forEach((spot, i) => {
+    const row = document.createElement("tr");
+    row.innerHTML = `<td><span class="swatch" style="background:${rgbToHex(spot.rgb)}" title="${spot.library || ""}"></span></td>
+      <td><input type="text" value="${spot.name.replace(/"/g, "&quot;")}" aria-label="Nombre de la tinta"></td>
+      <td><input type="checkbox" ${spot.halftone ? "checked" : ""} aria-label="Semitono"></td>
+      <td><input type="checkbox" ${spot.opaque ? "checked" : ""} aria-label="Cubriente"></td>
+      <td><input type="checkbox" ${spot.base !== false ? "checked" : ""} aria-label="Base"></td>`;
+    const [name, halftone, opaque, base] = row.querySelectorAll("input");
+    name.onchange = () => { spot.name = name.value || spot.name; schedule(); };
+    halftone.onchange = () => { spot.halftone = halftone.checked; schedule(); };
+    opaque.onchange = () => { spot.opaque = opaque.checked; schedule(); };
+    base.onchange = () => { spot.base = base.checked; schedule(); };
+    body.appendChild(row);
+  });
+}
+
+let timer = null, running = false, pending = false;
+function schedule() { clearTimeout(timer); timer = setTimeout(runPreview, 350); }
+
+async function runPreview() {
+  if (!state.docId) return;
+  if (running) { pending = true; return; }
+  running = true; $("busy").style.display = "block";
+  try {
+    const response = await api("/api/preview", {
+      doc_id: state.docId, settings: JSON.stringify(currentSettings()), view: $("view").value,
+      steps: state.steps, misregister_mm: $("misreg").value });
+    const r = await response.json();
+    $("preview").src = "data:image/png;base64," + r.image;
+    $("preview").style.display = "block";
+    $("empty").style.display = "none";
+    renderScreens(r.channels);
+    const rep = r.report, parts = [`${$("lpi").value} LPI a ${$("dpi").value} DPI`];
+    if ($("mode").value === "cmyk" || $("mode").value === "cmyk_spot") parts.push(`tinta total máx. ${rep.tac_max.toFixed(0)} %`);
+    if (rep.lost > 0.005) parts.push(`${(rep.lost * 100).toFixed(1)} % con puntos < ${rep.hold_min.toFixed(0)} % que la malla no sostiene`);
+    if (rep.plugged > 0.005) parts.push(`${(rep.plugged * 100).toFixed(1)} % con sombras que se cerrarán`);
+    const inkName = (id) => (r.channels.find(c => c.id === id) || { name: id }).name;
+    for (const [id, thin] of Object.entries(rep.thin || {})) {
+      if (thin.lines > 0.002) parts.push(`${(thin.lines * 100).toFixed(1)} % de ${inkName(id)} son líneas de menos de ${rep.min_line_mm.toFixed(2)} mm`);
+      if (thin.specks) parts.push(`${thin.specks} motas sueltas en ${inkName(id)} (sube «Limpiar motas»)`);
+      if (thin.gaps > 0.002) parts.push(`${inkName(id)} tiene huecos de menos de ${rep.min_line_mm.toFixed(2)} mm que se taparán`);
+    }
+    parts.unshift(`diseño ${r.design_mm[0].toFixed(1)} × ${r.design_mm[1].toFixed(1)} mm en lienzo de ${r.canvas_mm[0]} × ${r.canvas_mm[1]} mm`
+                  + (r.reduced ? " (no cabía: se redujo al área útil)" : ""));
+    if (r.guides_missing && r.guides_missing.length) parts.push(`sin espacio en blanco para: ${r.guides_missing.join(", ")} (sube el desgaste o usa guías en margen)`);
+    parts.push(`vista previa al ${(r.scale * 100).toFixed(0)} %`);
+    setStatus(parts.join("; ") + ". " + r.resolution.message);
+  } catch (e) {
+    setStatus(e.message, true);
+  } finally {
+    running = false; $("busy").style.display = "none";
+    if (pending) { pending = false; schedule(); }
+  }
+}
+
+function renderScreens(channels) {
+  const holder = $("screens");
+  holder.innerHTML = "";
+  const all = document.createElement("div");
+  all.className = "screen" + (state.steps < 0 ? " on" : "");
+  all.innerHTML = `<span>Todas</span>`;
+  all.onclick = () => { state.steps = -1; $("stepLabel").textContent = ""; schedule(); };
+  holder.appendChild(all);
+  channels.forEach((ch, i) => {
+    const el = document.createElement("div");
+    el.className = "screen" + (state.steps === i + 1 ? " on" : "");
+    el.title = "Ver hasta esta pasada";
+    el.innerHTML = `<span class="n">${i + 1}</span><span class="ink" style="background:${rgbToHex(ch.rgb)}"></span>
+                    <span>${ch.name}</span><span class="a">${(+ch.angle).toFixed(1).replace(".0", "")}°</span>`;
+    el.onclick = () => { state.steps = i + 1; $("stepLabel").textContent = `Hasta la pasada ${i + 1}: ${ch.name}`; $("view").value = "print"; schedule(); };
+    holder.appendChild(el);
+  });
+}
+
+async function upload(file) {
+  setStatus(`Subiendo ${file.name}…`);
+  try {
+    const r = await (await api("/api/upload", { file, dpi: $("dpi").value, input_profile: $("inputProfile").value })).json();
+    state.docId = r.id; state.spots = []; state.steps = -1;
+    $("thumb").src = "data:image/png;base64," + r.thumbnail; $("thumb").style.display = "block";
+    const info = r.info;
+    $("info").textContent = `${info.width_px}×${info.height_px} px, ${info.dpi_x.toFixed(0)} dpi, ${info.width_cm.toFixed(1)}×${info.height_cm.toFixed(1)} cm. ${info.notes.join(". ")}`;
+    $("separate").disabled = false; $("export").disabled = false;
+    renderSpots();
+    if (["spot", "index"].includes($("mode").value)) await detect(); else runPreview();
+  } catch (e) { setStatus(e.message, true); }
+}
+
+async function detect() {
+  if (!state.docId) return;
+  const r = await (await api("/api/palette", { doc_id: state.docId, count: $("spotCount").value,
+                                               settings: JSON.stringify(currentSettings()) })).json();
+  state.spots = r.spot_colors;
+  renderSpots(); runPreview();
+}
+
+async function exportZip() {
+  $("export").disabled = true; setStatus("Generando positivos a resolución completa…");
+  try {
+    const response = await api("/api/export", { doc_id: state.docId, settings: JSON.stringify(currentSettings()) });
+    const blob = await response.blob();
+    const name = (response.headers.get("Content-Disposition") || "").match(/filename="(.+)"/);
+    const link = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: name ? name[1] : "positivos.zip" });
+    link.click(); URL.revokeObjectURL(link.href);
+    setStatus(`Positivos exportados (${(blob.size / 1048576).toFixed(1)} MB).`);
+  } catch (e) { setStatus(e.message, true); }
+  $("export").disabled = false;
+}
+
+function applySubstrate() {
+  const p = state.options.substrates[$("substrate").value];
+  if (!p) return;
+  $("garment").value = rgbToHex(p.garment); $("whiteBase").checked = p.white_base;
+  if (p.base) { $("base").value = p.base; $("baseColor").value = rgbToHex(state.options.bases[p.base]); }
+  else { $("base").value = "Base blanca"; $("baseColor").value = "#ffffff"; }
+  $("inkLimit").value = p.ink_limit; $("minDot").value = p.min_dot; $("maxDot").value = p.max_dot; $("gain").value = p.dot_gain;
+  schedule();
+}
+
+function fillProfiles(profiles, selectSeparation) {
+  const current = selectSeparation ?? $("iccProfile").value, currentInput = $("inputProfile").value || "sRGB";
+  fillSelect($("iccProfile"), [["Fórmula de la app (GCR + límite de tinta)", ""],
+    ...profiles.filter(p => p.separation).map(p => [p.label, p.name])], current);
+  fillSelect($("inputProfile"), [["sRGB (estándar)", "sRGB"],
+    ...profiles.filter(p => p.input).map(p => [p.label, p.name])], currentInput);
+  describeProfile();
+}
+
+async function describeProfile() {
+  const name = $("iccProfile").value, uses = !!name;
+  for (const id of ["iccIntent", "iccBpc", "iccLimit"]) $(id).disabled = !uses;
+  if (!uses) { $("iccInfo").textContent = "Separación con fórmula: GCR 0.8 y el límite de tinta del sustrato."; return; }
+  const r = await (await fetch(`/api/profile-info?name=${encodeURIComponent(name)}&intent=${encodeURIComponent($("iccIntent").value)}&bpc=${$("iccBpc").checked}`)).json();
+  $("iccInfo").textContent = `${r.description}: tinta total máxima del perfil ${r.tac.toFixed(0)} %. MD5 ${r.md5.slice(0, 12)}…`;
+}
+
+async function init() {
+  const o = state.options = await (await fetch("/api/options")).json();
+  fillSelect($("mode"), Object.entries(o.modes), "cmyk");
+  fillSelect($("shape"), Object.entries(o.shapes), "circle");
+  fillSelect($("angles"), Object.keys(o.angle_presets).map(k => [k, k]));
+  fillSelect($("substrate"), [["Personalizado", "Personalizado"], ...Object.keys(o.substrates).map(k => [k, k])]);
+  fillSelect($("inkType"), Object.keys(o.ink_types).map(k => [k, k]));
+  fillSelect($("paper"), Object.keys(o.papers).map(k => [k, k]), "A3");
+  $("paper").addEventListener("change", () => { $("customRow").hidden = $("paper").value !== "Personalizado"; });
+  $("placement").addEventListener("change", () => { $("designWidthRow").hidden = $("placement").value !== "width"; });
+  const guideControls = () => {
+    const on = $("guides").checked, pos = $("guidePos").value;
+    const blank = pos === "blank" || (pos === "auto" && +$("distress").value > 0);
+    $("guidePos").disabled = !on; $("strip").disabled = !on; $("guideMargin").disabled = !on || blank;
+  };
+  for (const id of ["guides", "guidePos", "distress"]) $(id).addEventListener("change", guideControls);
+  guideControls();
+  $("customW").addEventListener("change", schedule); $("customH").addEventListener("change", schedule);
+  fillSelect($("iccIntent"), o.intents.map(k => [k, k]));
+  fillSelect($("base"), [...Object.keys(o.bases).map(k => [k, k]), ["Personalizada", "custom"]], "Base blanca");
+  $("base").onchange = () => { if (o.bases[$("base").value]) $("baseColor").value = rgbToHex(o.bases[$("base").value]); schedule(); };
+  $("baseColor").onchange = () => { $("base").value = "custom"; schedule(); };
+  fillProfiles(o.profiles, "");
+  $("iccProfile").onchange = $("iccIntent").onchange = $("iccBpc").onchange = () => { describeProfile(); schedule(); };
+  $("iccLimit").onchange = schedule;
+  $("inputProfile").onchange = () => { if ($("file").files[0]) upload($("file").files[0]); };
+  $("iccUpload").onchange = async () => {
+    const file = $("iccUpload").files[0];
+    if (!file) return;
+    try {
+      const r = await (await api("/api/profile", { file })).json();
+      fillProfiles(r.profiles, r.profile.separation ? r.profile.name : undefined);
+      setStatus(`Perfil instalado: ${r.profile.label} (${r.profile.space}).`);
+      schedule();
+    } catch (e) { setStatus(e.message, true); }
+  };
+
+  const drop = $("drop");
+  drop.onclick = () => $("file").click();
+  drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]); };
+  $("file").onchange = () => $("file").files[0] && upload($("file").files[0]);
+
+  $("suggest").onclick = async () => { await checkMesh(); $("lpi").value = state.mesh.suggested; await checkMesh(); schedule(); };
+  $("holdLimits").onclick = async () => { await checkMesh(); $("minDot").value = Math.round(state.mesh.hold[0]); $("maxDot").value = Math.round(state.mesh.hold[1]); schedule(); };
+  $("meshUnit").onchange = () => { const v = +$("mesh").value; $("mesh").value = Math.round($("meshUnit").value === "cm" ? v / 2.54 : v * 2.54); checkMesh(); };
+  $("mesh").oninput = $("lpi").oninput = () => { checkMesh(); schedule(); };
+  $("mode").onchange = () => { renderSpots(); if (["spot", "index"].includes($("mode").value) && !state.spots.length) detect(); else schedule(); };
+  $("substrate").onchange = applySubstrate;
+  $("detect").onclick = detect;
+  $("view").onchange = () => { $("misregBox").hidden = $("view").value !== "registration"; schedule(); };
+  $("actual").onchange = () => {
+    $("preview").classList.toggle("actual", $("actual").checked);
+    $("viewport").classList.toggle("actual", $("actual").checked);
+  };
+  $("separate").onclick = runPreview;
+  $("export").onclick = exportZip;
+  $("library").onchange = async () => {
+    const file = $("library").files[0];
+    if (!file || !state.spots.length) return;
+    try {
+      const r = await (await api("/api/match", { library: file, spot_colors: JSON.stringify(state.spots) })).json();
+      state.spots = r.spot_colors; renderSpots(); schedule();
+      setStatus(`Tintas igualadas con ${r.library_size} muestras de la biblioteca (ΔE2000).`);
+    } catch (e) { setStatus(e.message, true); }
+  };
+  for (const id of ["shape", "angles", "minDot", "maxDot", "gain", "garment", "inkType", "inkLimit", "whiteBase",
+                    "paper", "placement", "designWidth", "align", "distress", "guidePos", "guideMargin", "guides", "strip", "mirror", "negative", "trap", "despeckle", "denoise", "sharpen", "smoothEdges", "tolerance", "indexRes", "misreg", "dpi"]) {
+    $(id).addEventListener("change", schedule);
+  }
+  checkMesh();
+}
+init();
+</script>
+</body>
+</html>

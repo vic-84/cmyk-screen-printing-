@@ -1,0 +1,5 @@
+fastapi
+uvicorn
+python-multipart
+# Solo para las pruebas de la API
+httpx

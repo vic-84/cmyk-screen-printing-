@@ -1,7 +1,5 @@
-# Origen: claude_test_fixed_lpi.py
 # Sección: Variables globales de configuración y constantes
 
-import numpy as np
 
 # Especificaciones técnicas detalladas de mallas serigráficas
 MESH_SPECIFICATIONS = {
@@ -56,114 +54,80 @@ MESH_SPECIFICATIONS = {
     }
 }
 
-# Generar LPI_VALUES basado en especificaciones reales
-LPI_VALUES = {}
-for mesh, specs in MESH_SPECIFICATIONS.items():
-    for lpi in specs['recommended_lpi']:
-        key = f"{lpi} LPI (malla {mesh})"
-        scale = max(3, int(400 / lpi))
-        LPI_VALUES[key] = scale
+# El LPI recomendado se calcula con la regla de 3.5 a 4.75 hilos por línea
+# (antes los valores implicaban ~2.5-3 hilos por línea y el punto se perdía).
+for _mesh, _specs in MESH_SPECIFICATIONS.items():
+    _specs['recommended_lpi'] = [round(_mesh / 4.5), round(_mesh / 4), round(_mesh / 3.6)]
+    _specs['max_lpi'] = int(_mesh / 3.5)
+
+# Mallas comunes en hilos/pulgada y su equivalente aproximado en hilos/cm
+COMMON_MESHES_TPI = [86, 110, 125, 140, 156, 160, 180, 196, 200, 230, 255, 280, 305, 355]
+
+# Lineaturas ofrecidas en la interfaz (el campo también acepta otros valores)
+LPI_OPTIONS = [20, 22, 25, 28, 30, 32, 35, 38, 40, 42, 45, 48, 50, 55, 60, 65, 70, 75, 85]
+LPI_VALUES = {f"{lpi} LPI": lpi for lpi in LPI_OPTIONS}
 
 # Clasificación por aplicación
 APPLICATION_CATEGORIES = {
     'Textil Básico': {
         'meshes': [90, 110],
         'description': 'Camisetas gruesas, sudaderas, efectos especiales',
-        'lpi_range': '25-45',
+        'lpi_range': '19-31',
         'ink_deposit': 'Alto (50-70 micrones)'
     },
     'Textil Premium': {
         'meshes': [120, 135],
         'description': 'Algodón fino, poliéster, gráficos detallados',
-        'lpi_range': '35-55', 
+        'lpi_range': '25-39',
         'ink_deposit': 'Medio (35-50 micrones)'
     },
     'Papel y Cartón': {
         'meshes': [150, 180],
         'description': 'Materiales porosos, etiquetas, packaging',
-        'lpi_range': '45-65',
+        'lpi_range': '32-51',
         'ink_deposit': 'Medio-Bajo (25-45 micrones)'
     },
     'Alta Definición': {
         'meshes': [200],
         'description': 'Electrónicos, cerámica, aplicaciones técnicas',
-        'lpi_range': '55-70',
+        'lpi_range': '42-57',
         'ink_deposit': 'Bajo (15-35 micrones)'
     }
 }
 
-# Formatos de impresión estándar con múltiples unidades
-PRINT_FORMATS = {
-    "A4 (210×297mm)": {"width": 210, "height": 297, "dpi_recommended": 300, "unit": "mm"},
-    "A3 (297×420mm)": {"width": 297, "height": 420, "dpi_recommended": 300, "unit": "mm"},
-    "A3+ (329×483mm)": {"width": 329, "height": 483, "dpi_recommended": 300, "unit": "mm"}, 
-    "A2 (420×594mm)": {"width": 420, "height": 594, "dpi_recommended": 300, "unit": "mm"},
-    "A1 (594×841mm)": {"width": 594, "height": 841, "dpi_recommended": 200, "unit": "mm"},
-    "A0 (841×1189mm)": {"width": 841, "height": 1189, "dpi_recommended": 150, "unit": "mm"},
-    "Letter (8.5×11in)": {"width": 8.5, "height": 11, "dpi_recommended": 300, "unit": "in"},
-    "Legal (8.5×14in)": {"width": 8.5, "height": 14, "dpi_recommended": 300, "unit": "in"},
-    "Tabloid (11×17in)": {"width": 11, "height": 17, "dpi_recommended": 300, "unit": "in"},
-    "Póster 50×70cm": {"width": 50, "height": 70, "dpi_recommended": 150, "unit": "cm"},
-    "Póster 70×100cm": {"width": 70, "height": 100, "dpi_recommended": 120, "unit": "cm"},
-    "Banner 100×200cm": {"width": 100, "height": 200, "dpi_recommended": 100, "unit": "cm"},
-    "Playera S (45×60cm)": {"width": 45, "height": 60, "dpi_recommended": 200, "unit": "cm"},
-    "Playera M (50×70cm)": {"width": 50, "height": 70, "dpi_recommended": 200, "unit": "cm"},
-    "Playera L (55×75cm)": {"width": 55, "height": 75, "dpi_recommended": 200, "unit": "cm"},
-    "Playera XL (60×80cm)": {"width": 60, "height": 80, "dpi_recommended": 200, "unit": "cm"},
-    "Personalizado": {"width": 210, "height": 297, "dpi_recommended": 300, "unit": "mm"}
-}
-
-# Unidades de medida disponibles
-MEASUREMENT_UNITS = {
-    "mm": {
-        "label": "Milímetros",
-        "name": "Milímetros",
-        "symbol": "mm",
-        "to_mm_factor": 1.0,
-        "precision": 0,
-        "step": 1,
-        "range": (10, 5000)
-    },
-    "cm": {
-        "label": "Centímetros",
-        "name": "Centímetros",
-        "symbol": "cm",
-        "to_mm_factor": 10.0,
-        "precision": 1,
-        "step": 0.1,
-        "range": (1.0, 500.0)
-    },
-    "in": {
-        "label": "Pulgadas",
-        "name": "Pulgadas",
-        "symbol": "in",
-        "to_mm_factor": 25.4,
-        "precision": 2,
-        "step": 0.01,
-        "range": (0.5, 200.0)
-    }
-}
-
-# Configuración de guías de registro
-REGISTRATION_GUIDE_SETTINGS = {
-    "margin_mm": 15,          # Margen desde el borde del papel
-    "cross_size_mm": 8,       # Tamaño de las cruces de registro
-    "corner_marks": True,     # Marcas en las esquinas
-    "center_marks": True,     # Marcas en los centros de los lados
-    "bleed_marks": True,      # Marcas de sangrado
-    "color_bars": True,       # Barras de color para control
-    "info_text": True         # Información técnica
-}
-
 POINT_SHAPES = {
     "Redonda": "circle",
-    "Elipse": "ellipse",
-    "Diamante": "diamond", 
+    "Elíptica": "ellipse",
+    "Cuadrada": "square",
+    "Diamante": "diamond",
     "Lineal": "line"
 }
 
-CMYK_ANGLES = {'C': 15, 'M': 75, 'Y': 0, 'K': 45, 'W': 90}  # Agregamos base blanca
-CHANNEL_NAMES = ["C", "M", "Y", "K", "W"]  # Incluimos base blanca
+# Ángulos para serigrafía: el juego offset (15/75/0/45) desplazado 7.5° para no
+# alinear ninguna placa con los hilos de la malla (0°/90°/45°). Con punto redondo
+# 90° equivale a 0°, por eso la base blanca no puede ir a 90° (chocaría con Y).
+CMYK_ANGLES = {'C': 22.5, 'M': 52.5, 'Y': 7.5, 'K': 82.5, 'W': 37.5}
+
+# Juegos de ángulos seleccionables
+ANGLE_PRESETS = {
+    "Serigrafía (offset + 7.5°)": dict(CMYK_ANGLES),
+    # Juego clásico de offset: 0°/45°/90° coinciden con la geometría de la malla
+    "Offset (15/75/0/45)": {'C': 15, 'M': 75, 'Y': 0, 'K': 45, 'W': 30},
+    # Una sola tinta: se usa el ángulo en K (y en la base blanca)
+    "Monocromo 22.5°": {**CMYK_ANGLES, 'K': 22.5, 'W': 67.5},
+    "Monocromo 25°": {**CMYK_ANGLES, 'K': 25, 'W': 70},
+}
+CUSTOM_ANGLE_PRESET = "Personalizado"
+
+# Técnicas de separación
+SEPARATION_MODES = {
+    "Cuatricromía (CMYK)": "cmyk",
+    "Semitono (1 tinta)": "mono",
+    "Color plano (spot)": "spot",
+    "Color índice": "index",
+    "Cuatricromía + planos": "cmyk_spot",
+}
+SPOT_PALETTE_MODES = ("spot", "index", "cmyk_spot")
 
 # Configuraciones de resolución
 RESOLUTION_ENHANCEMENT = {
@@ -178,11 +142,16 @@ RESOLUTION_ENHANCEMENT = {
 WHITE_BASE_SETTINGS = {
     "enabled": True,
     "lpi": 45,  # Lineatura específica para base blanca
-    "opacity_threshold": 240,  # Umbral para detectar áreas que necesitan base
-    "expansion_pixels": 2,  # Expansión del área de base blanca
+    "opacity_threshold": 160,  # Valor (0-255) del canal más claro desde el que la base es 100 %
+    "choke_pixels": 2,  # Contracción de la base para que no asome por los bordes
     "shape": "circle"  # Forma específica para base blanca
 }
-# Agregar esto al inicio de tu archivo main_window.py o en constants.py
+
+# Separación de color
+GCR_AMOUNT = 0.8        # Fracción del gris común (min C,M,Y) que se pasa a negro
+TOTAL_INK_LIMIT = 260   # Límite de tinta total (TAC) en %, textil: 240-280
+
+# Formatos de lienzo (mm)
 
 PRINT_FORMATS = {
     'A4': {
@@ -245,26 +214,6 @@ MEASUREMENT_UNITS = {
     }
 }
 
-def convert_units(value, from_unit, to_unit):
-    """Convertir entre unidades de medida"""
-    # Convertir todo a mm primero
-    to_mm_factors = {
-        'mm': 1.0,
-        'cm': 10.0,
-        'in': 25.4
-    }
-    
-    if from_unit not in to_mm_factors or to_unit not in to_mm_factors:
-        return value
-    
-    # Convertir a mm
-    value_mm = value * to_mm_factors[from_unit]
-    
-    # Convertir a la unidad destino
-    result = value_mm / to_mm_factors[to_unit]
-    
-    return result
-
 REGISTRATION_GUIDE_SETTINGS = {
     "margin_mm": 15,          # Margen para guías en mm
     "cross_size_mm": 8,       # Tamaño de cruces de registro en mm
@@ -274,8 +223,14 @@ REGISTRATION_GUIDE_SETTINGS = {
     "line_thickness": 2       # Grosor de líneas
 }
 
-def format_dimension_display(width, height, unit):
-    """Formatear dimensiones para mostrar"""
-    unit_info = MEASUREMENT_UNITS.get(unit, {'symbol': unit})
-    symbol = unit_info.get('symbol', unit)
-    return f"{width:.1f}×{height:.1f}{symbol}"
+
+
+# Bases bajo el color: la blanca da el color más brillante en prenda oscura;
+# la gris cubre con menos tinta y tacto más suave; la gris bloqueadora (oscura)
+# frena la migración del teñido en poliéster.
+BASE_PRESETS = {
+    "Base blanca": [255, 255, 255],
+    "Base gris claro": [200, 200, 200],
+    "Base gris": [150, 150, 150],
+    "Base gris bloqueadora": [95, 95, 98],
+}

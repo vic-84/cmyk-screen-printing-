@@ -1,0 +1,7 @@
+numpy
+opencv-python
+PyQt5
+pillow
+PyMuPDF
+psd-tools
+# EPS: requiere Ghostscript instalado en el sistema (https://ghostscript.com)

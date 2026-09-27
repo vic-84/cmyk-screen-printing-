@@ -63,7 +63,7 @@ Correr las pruebas: `python -m unittest tests.test_core`
    - Tramar a tamaño real (A3 a 300 dpi ≈ 17 Mpx) tarda **~13 s y ~1.8 GB de RAM** (medido).
    - Cada movimiento del slider de umbral regenera el canal completo.
    - Solución: generar la **vista previa a resolución reducida** (por ejemplo 1500 px de lado) y la trama completa solo al guardar.
-9. **Archivos pesados en el repo.** `outputs/` y `debug_mask_*.png` ya no se versionan (están en `.gitignore`). Queda `diseno-dtf39.png` (24 MB).
+9. **Archivos pesados en el repo.** `outputs/`, `debug_mask_*.png` y `diseno-dtf39.png` ya no se versionan (están en `.gitignore`).
 
 ---
 

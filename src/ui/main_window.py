@@ -2,6 +2,7 @@
 
 import os
 import json
+from contextlib import contextmanager
 from datetime import datetime
 import numpy as np
 import cv2
@@ -613,6 +614,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.load_btn = QtWidgets.QPushButton("Abrir imagen o PDF…")
         self.load_btn.clicked.connect(self.load_image_or_pdf)
         image_buttons.addWidget(self.load_btn, 1)
+        self.clear_image_btn = QtWidgets.QPushButton("Quitar")
+        self.clear_image_btn.setToolTip("Quita la imagen y vuelve todos los ajustes a los de inicio")
+        self.clear_image_btn.clicked.connect(self.clear_image)
+        self.clear_image_btn.setEnabled(False)
+        image_buttons.addWidget(self.clear_image_btn)
         self.wizard_btn = QtWidgets.QPushButton("Asistente")
         self.wizard_btn.setToolTip("Recomienda malla, LPI y tinta según soporte y prenda")
         self.wizard_btn.clicked.connect(self.show_setup_wizard)
@@ -1282,7 +1288,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.channel_curves = {}
         self.channel_curve_buttons = {}
 
-        def general_spin(maximum, tooltip):
+        def general_spin(ch, maximum, tooltip):
             spin = QtWidgets.QDoubleSpinBox()
             spin.setRange(-1, maximum)
             spin.setDecimals(0)
@@ -1296,7 +1302,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             spin.setAlignment(QtCore.Qt.AlignCenter)
             spin.setStyleSheet("QDoubleSpinBox { padding: 2px 2px; }")
             spin.setToolTip(tooltip + "\n«General» usa el valor del grupo Tono.")
-            spin.valueChanged.connect(self.on_channel_tone_changed)
+            spin.valueChanged.connect(lambda *_: self.on_channel_tone_changed(ch))
             return spin
 
         for col in (1, 2, 3):
@@ -1304,9 +1310,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         for i, ch in enumerate(['C', 'M', 'Y', 'K', 'W'], 1):
             tone_grid.addWidget(QtWidgets.QLabel("Base" if ch == 'W' else CHANNEL_NAMES[ch]), i, 0)
             spins = {
-                'min_dot': general_spin(50, "Punto mínimo de esta tinta"),
-                'max_dot': general_spin(100, "Punto máximo de esta tinta"),
-                'dot_gain': general_spin(45, "Ganancia al 50 % medida con esta tinta"),
+                'min_dot': general_spin(ch, 50, "Punto mínimo de esta tinta"),
+                'max_dot': general_spin(ch, 100, "Punto máximo de esta tinta"),
+                'dot_gain': general_spin(ch, 45, "Ganancia al 50 % medida con esta tinta"),
             }
             for col, key in enumerate(('min_dot', 'max_dot', 'dot_gain'), 1):
                 tone_grid.addWidget(spins[key], i, col)
@@ -1430,6 +1436,12 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.status_bar = QtWidgets.QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Abre una imagen o PDF para empezar")
+        # Aviso de trabajo en curso: ancho fijo para que aparecer no mueva nada
+        self.busy_label = QtWidgets.QLabel()
+        self.busy_label.setFixedWidth(170)
+        self.busy_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.status_bar.addPermanentWidget(self.busy_label)
+        self._busy_depth = 0
 
         menu_bar = self.menuBar()
         file_menu = menu_bar.addMenu("&Archivo")
@@ -1498,18 +1510,25 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.spot_angle_spin.valueChanged.connect(self.schedule_rescreen)
         for spin in self.density_spins.values():
             spin.valueChanged.connect(lambda *_: self.channel_list.viewport().update())
-        for control in (self.min_dot_spin, self.max_dot_spin, self.dot_gain_spin, *self.density_spins.values()):
+        for control in (self.min_dot_spin, self.max_dot_spin, self.dot_gain_spin):
             control.valueChanged.connect(self.schedule_rescreen)
         for control in (self.shape_combo, self.angle_preset_combo, self.lpi_combo):
             control.currentTextChanged.connect(self.schedule_rescreen)
-        for control in self.angle_spins.values():
-            control.valueChanged.connect(self.schedule_rescreen)
+        # Densidad y ángulo de un canal: solo se retrama ese canal
+        for ch in self.density_spins:
+            for control in (self.density_spins[ch], self.angle_spins[ch]):
+                control.valueChanged.connect(lambda *_, c=ch: self.schedule_rescreen(channel=c))
         self.mesh_unit_combo.currentIndexChanged.connect(self.on_mesh_unit_changed)
         self.shape_combo.currentTextChanged.connect(self.update_moire_analysis)
         self.update_moire_analysis()
         self.update_guide_controls()
         self.update_garment_black_controls()
         self.update_format_info()
+        # Ajustes de inicio: se restauran al quitar o cambiar la imagen
+        self._default_job = self.job_settings()
+        self._default_ui = (self.unit_combo.currentIndex(), self.custom_width.value(), self.custom_height.value(),
+                            self.custom_dpi.value(), self.print_format_combo.currentText(),
+                            self.resolution_combo.currentIndex(), self.view_mode_combo.currentIndex())
 
     # =====================================================================
     # == MÉTODOS DE LÓGICA Y EVENTOS
@@ -1750,18 +1769,20 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         Carga cualquier formato admitido (ver core/input.py). Los vectoriales se
         rasterizan al DPI de salida, así la trama se genera con todo el detalle.
         """
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
-            document = doc_input.load_document(file_path, dpi or self.job_settings().dpi, page,
-                                               self.input_profile_combo.currentData())
+            with self.busy("Abriendo imagen…"):
+                document = doc_input.load_document(file_path, dpi or self.job_settings().dpi, page,
+                                                   self.input_profile_combo.currentData())
         except Exception as e:
-            QtWidgets.QApplication.restoreOverrideCursor()
             QtWidgets.QMessageBox.critical(self, "No se pudo abrir el archivo",
                                            f"{os.path.basename(file_path)}\n\n{e}")
             return
-        QtWidgets.QApplication.restoreOverrideCursor()
 
+        if self.image is not None:
+            # Imagen nueva en lugar de otra: se empieza con los ajustes de inicio
+            self.clear_image()
         self._set_loaded_image(document.bgra)
+        self.clear_image_btn.setEnabled(True)
         self.image_info = document.info()
         self.image_info['file_size_mb'] = os.path.getsize(file_path) / (1024 * 1024)
         self.channel_arrays, self.preview_cache = {}, {}
@@ -2005,6 +2026,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self._reseparate_timer = QtCore.QTimer(self)
             self._reseparate_timer.setSingleShot(True)
             self._reseparate_timer.timeout.connect(self.process_cmyk)
+        self.set_busy("Aplicando ajustes…")
         self._reseparate_timer.start(400)
 
     def _new_spot(self, rgb, name=None):
@@ -2185,24 +2207,32 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             write_ase(path, [{'name': sp['name'], 'rgb': sp['rgb']} for sp in self.spot_colors])
             self.status_bar.showMessage(f"Paleta exportada: {os.path.basename(path)}", 8000)
 
-    def schedule_rescreen(self, *_):
-        """Vuelve a tramar la vista previa poco después del último cambio de tono o trama."""
+    def schedule_rescreen(self, *_, channel=None):
+        """
+        Vuelve a tramar la vista previa poco después del último cambio de tono o
+        trama. channel: solo ese canal cambió (ajustes por canal); None = todos.
+        """
         if not self.channel_arrays:
             return
         if not hasattr(self, '_rescreen_timer'):
             self._rescreen_timer = QtCore.QTimer(self)
             self._rescreen_timer.setSingleShot(True)
             self._rescreen_timer.timeout.connect(self.rescreen_preview)
+            self._dirty_channels = set()
+        self._dirty_channels |= {channel} if channel else set(self.channel_arrays)
+        self.set_busy("Aplicando ajustes…")
         self._rescreen_timer.start(250)
 
     def rescreen_preview(self):
-        """Retrama los canales ya separados (no repite la separación de color)."""
-        if not self.channel_arrays:
-            return
-        settings = self.job_settings()
-        self.preview_cache = {name: screen_channel(data, name, settings, self.preview_scale)
-                              for name, data in self.channel_arrays.items()}
-        self.update_preview()
+        """Retrama los canales que cambiaron (no repite la separación de color)."""
+        dirty, self._dirty_channels = self._dirty_channels & self.channel_arrays.keys(), set()
+        with self.busy():
+            settings = self.job_settings()
+            # Diccionario nuevo: las guías en blanco se recalculan si cambió alguna trama
+            self.preview_cache = {**self.preview_cache,
+                                  **{name: screen_channel(self.channel_arrays[name], name, settings,
+                                                          self.preview_scale) for name in dirty}}
+            self.update_preview()
 
     def mesh_tpi(self):
         """Malla actual en hilos por pulgada."""
@@ -2335,12 +2365,16 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             return
         self.channel_thresholds[self.current_channel] = value
         self.threshold_value_label.setText(f"{value} / 255")
+        self.set_busy("Aplicando ajustes…")
         self.threshold_timer.start(100)
 
     def _delayed_threshold_update(self):
         if self.current_channel in self.channel_arrays:
-            self._regenerate_single_halftone(self.current_channel)
-            self.update_preview()
+            with self.busy():
+                self._regenerate_single_halftone(self.current_channel)
+                self.update_preview()
+        else:
+            self.set_busy("")
 
     def pick_color_live(self, initial, title, preview):
         """
@@ -2552,6 +2586,63 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, "No se pudo abrir la configuración",
                                            f"El archivo no es una configuración válida.\n\n{e}")
 
+    BUSY_STYLE = (f"color: white; background: {theme.EMULSION}; border-radius: 3px; "
+                  "font-weight: bold; padding: 1px 6px;")
+
+    def set_busy(self, text):
+        """Muestra (texto) u oculta ("") el aviso de trabajo en curso de la barra de estado."""
+        self.busy_label.setText(text)
+        self.busy_label.setStyleSheet(self.BUSY_STYLE if text else "")
+        # El cálculo corre en este hilo: se pinta ya, sin esperar al bucle de eventos
+        self.busy_label.repaint()
+
+    @contextmanager
+    def busy(self, text="Aplicando ajustes…"):
+        """Aviso y cursor de espera mientras dura un cálculo (admite anidarse)."""
+        self._busy_depth += 1
+        if self._busy_depth == 1:
+            self.set_busy(text)
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            yield
+        finally:
+            self._busy_depth -= 1
+            if not self._busy_depth:
+                QtWidgets.QApplication.restoreOverrideCursor()
+                self.set_busy("")
+
+    def reset_settings_to_defaults(self):
+        """Todos los ajustes como al abrir la app."""
+        self.reset_all_to_defaults()          # colores de tinta, umbrales y prenda
+        self._next_spot_number = 1
+        self.channel_list.clearSelection()
+        self.apply_job_settings(self._default_job)
+        unit, width, height, dpi, print_format, resolution, view = self._default_ui
+        # apply_job_settings deja el lienzo en «Personalizado»: se vuelve al de inicio
+        self.unit_combo.setCurrentIndex(unit)
+        self.custom_width.setValue(width)
+        self.custom_height.setValue(height)
+        self.custom_dpi.setValue(dpi)
+        self.print_format_combo.setCurrentText(print_format)
+        self.resolution_combo.setCurrentIndex(resolution)
+        self.view_mode_combo.setCurrentIndex(view)
+        self.show_halftones_cb.setChecked(True)
+        self.update_channel_list_ui()
+
+    def clear_image(self):
+        """Quita la imagen y su separación; los ajustes vuelven a los de inicio."""
+        self.image = self.image_alpha = self.image_info = None
+        self.channel_arrays, self.preview_cache = {}, {}
+        self._guide_plan_cache = None
+        self.reset_settings_to_defaults()
+        self.original_label.setPixmap("Abre una imagen o PDF\npara empezar")
+        self.preview_label.setPixmap(None)
+        self.image_res_label.setText("Ninguna imagen abierta")
+        self.complexity_label.setText("")
+        self.design_size_label.setText("")
+        self.clear_image_btn.setEnabled(False)
+        self.status_bar.showMessage("Imagen quitada. Los ajustes volvieron a los de inicio.", 8000)
+
     def _get_halftone_params(self):
         """Celda, forma y ángulos actuales (en píxeles del positivo)."""
         settings = self.job_settings()
@@ -2588,10 +2679,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             return
         self.is_preview_updating = True
         try:
-            if self.view_individual_channel_cb.isChecked() and self.current_channel:
-                self.generate_single_channel_preview(self.current_channel)
-            else:
-                self.generate_composite_preview()
+            with self.busy():
+                if self.view_individual_channel_cb.isChecked() and self.current_channel:
+                    self.generate_single_channel_preview(self.current_channel)
+                else:
+                    self.generate_composite_preview()
         finally:
             self.is_preview_updating = False
 
@@ -2747,6 +2839,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         for label, value in zip(self.curve_value_labels, shifts):
             label.setText(f"{value:+d}" if value else "0")
         self.channel_list.viewport().update()
+        self.set_busy("Aplicando ajustes…")
         self.threshold_timer.start(100)       # retrama este canal al soltar
 
     def reset_channel_curve(self):
@@ -2827,7 +2920,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.channel_curves[channel] = curve
             self.channel_tone_spins[channel]['dot_gain'].setEnabled(not curve)
             self.channel_curve_buttons[channel].setText(f"{len(curve)} pts" if curve else "Curva")
-        self.schedule_rescreen()
+        self.schedule_rescreen(channel=channel)
 
     def current_channel_tone(self):
         """Ajustes propios de cada canal (solo los que no están en «General»)."""
@@ -2850,9 +2943,9 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             marks.append("tono propio")
         return ", ".join(marks)
 
-    def on_channel_tone_changed(self, *_):
+    def on_channel_tone_changed(self, channel):
         self.channel_list.viewport().update()
-        self.schedule_rescreen()
+        self.schedule_rescreen(channel=channel)
 
     def edit_gain_curve(self, channel=None):
         """Tabla para anotar el % impreso medido de cada % de película (general o de una tinta)."""
@@ -3071,21 +3164,20 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         vuelve a calcular todo a resolución completa.
         """
         if self.image is None:
+            self.set_busy("")       # una reseparación pendiente tras quitar la imagen
             return
 
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
         try:
-            settings = self.job_settings()
-            self.channel_arrays, self.preview_cache, self.preview_scale = render(
-                self.image, self.image_alpha, settings, preview=True)
-            self.update_preview()
+            with self.busy("Separando colores…"):
+                settings = self.job_settings()
+                self.channel_arrays, self.preview_cache, self.preview_scale = render(
+                    self.image, self.image_alpha, settings, preview=True)
+                self.update_preview()
 
-            self.show_quality_summary(settings)
-            self.update_resolution_advice()
+                self.show_quality_summary(settings)
+                self.update_resolution_advice()
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "No se pudo separar", str(e))
-        finally:
-            QtWidgets.QApplication.restoreOverrideCursor()
 
 
 # Malla y lineatura: franja de estado y diálogo (reglas de core/mesh.py)

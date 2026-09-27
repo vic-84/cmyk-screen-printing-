@@ -77,6 +77,40 @@ def _bayer(n=8):
 BAYER = _bayer()
 
 
+def _screen_geometry(w, top, bottom, cell_px, shape, angle):
+    """
+    Lo que depende solo de la trama (no de la imagen) para las filas top..bottom:
+    percentil del punto en cada píxel (0 en el centro de la celda, 1 en el borde)
+    y el umbral Bayer de su celda para el tramado híbrido.
+    """
+    max_value, table = _spot_calibration(shape)
+    angle_rad = np.radians(angle)
+    cos_a, sin_a = np.float32(np.cos(angle_rad)), np.float32(np.sin(angle_rad))
+    x, y = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(top, bottom, dtype=np.float32))
+    x_rot = x * cos_a + y * sin_a
+    y_rot = -x * sin_a + y * cos_a
+    # Posición dentro de la celda normalizada a -0.5 .. 0.5
+    dx = (x_rot % cell_px) / cell_px - 0.5
+    dy = (y_rot % cell_px) / cell_px - 0.5
+    spot = _spot_function(dx, dy, 0.5, shape)
+    index = np.clip(spot * ((CALIBRATION_BINS - 1) / max_value), 0, CALIBRATION_BINS - 1).astype(np.int32)
+    n = BAYER.shape[0]
+    cell_threshold = BAYER[np.floor(y_rot / cell_px).astype(np.int32) % n,
+                           np.floor(x_rot / cell_px).astype(np.int32) % n]
+    return table[index], cell_threshold
+
+
+# Vista previa: la geometría de cada canal se guarda y un ajuste de tono solo
+# compara contra ella. ponytail: ~8 bytes/px por canal (≈ 100 MB con 5 canales
+# de 2,5 Mpx); la exportación (más grande) sigue calculando por franjas.
+CACHE_MAX_PX = 6_000_000
+
+
+@lru_cache(maxsize=6)
+def _cached_geometry(h, w, cell_px, shape, angle):
+    return _screen_geometry(w, 0, h, cell_px, shape, angle)
+
+
 def halftone(channel, cell_px, shape='circle', angle=0.0, min_dot=0.0, max_dot=100.0):
     """
     Trama un canal de tinta (uint8, 255 = 100 % de tinta).
@@ -93,36 +127,26 @@ def halftone(channel, cell_px, shape='circle', angle=0.0, min_dot=0.0, max_dot=1
     """
     h, w = channel.shape
     out = np.empty((h, w), dtype=np.uint8)
-    max_value, table = _spot_calibration(shape)
-    low, high = min_dot / 100.0, max_dot / 100.0
-    scale_index = (CALIBRATION_BINS - 1) / max_value
+    low, high = np.float32(min_dot / 100.0), np.float32(max_dot / 100.0)
+    cell_px, angle = float(cell_px), float(angle)
 
-    angle_rad = np.radians(angle)
-    cos_a, sin_a = np.float32(np.cos(angle_rad)), np.float32(np.sin(angle_rad))
-    xs = np.arange(w, dtype=np.float32)
+    if h * w <= CACHE_MAX_PX:
+        bands = [(0, h, _cached_geometry(h, w, cell_px, shape, angle))]
+    else:
+        bands = ((top, min(h, top + BAND_ROWS),
+                  _screen_geometry(w, top, min(h, top + BAND_ROWS), cell_px, shape, angle))
+                 for top in range(0, h, BAND_ROWS))
 
-    for top in range(0, h, BAND_ROWS):
-        bottom = min(h, top + BAND_ROWS)
-        x, y = np.meshgrid(xs, np.arange(top, bottom, dtype=np.float32))
-        x_rot = x * cos_a + y * sin_a
-        y_rot = -x * sin_a + y * cos_a
-        # Posición dentro de la celda normalizada a -0.5 .. 0.5
-        dx = (x_rot % cell_px) / cell_px - 0.5
-        dy = (y_rot % cell_px) / cell_px - 0.5
-        spot = _spot_function(dx, dy, 0.5, shape)
-        # Percentil del valor dentro de la celda: 0 en el centro, 1 en el borde
-        index = np.clip(spot * scale_index, 0, CALIBRATION_BINS - 1).astype(np.int32)
-        pattern = table[index]
-        ink_level = channel[top:bottom].astype(np.float32) / 255.0
-        if low > 0 or high < 1:
-            # Umbral de la celda (todas sus celdas vecinas con umbrales distintos)
-            n = BAYER.shape[0]
-            cell_threshold = BAYER[np.floor(y_rot / cell_px).astype(np.int32) % n,
-                                   np.floor(x_rot / cell_px).astype(np.int32) % n]
-            light = (ink_level > 0) & (ink_level < low)
-            ink_level[light] = np.where(ink_level[light] / low > cell_threshold[light], low, 0.0)
-            dark = (ink_level > high) & (ink_level < 1)
-            ink_level[dark] = np.where((1 - ink_level[dark]) / (1 - high) > cell_threshold[dark], high, 1.0)
+    for top, bottom, (pattern, cell_threshold) in bands:
+        ink_level = channel[top:bottom].astype(np.float32) / np.float32(255.0)
+        # Umbral de la celda: celdas vecinas con umbrales distintos (Bayer)
+        if low > 0:
+            ink_level = np.where((ink_level > 0) & (ink_level < low),
+                                 np.where(ink_level > low * cell_threshold, low, np.float32(0)), ink_level)
+        if high < 1:
+            ink_level = np.where((ink_level > high) & (ink_level < 1),
+                                 np.where(1 - ink_level > (1 - high) * cell_threshold, high, np.float32(1)),
+                                 ink_level)
         ink = (ink_level > pattern) | (ink_level >= 1.0)
         out[top:bottom] = np.where(ink, 0, 255)
     return out

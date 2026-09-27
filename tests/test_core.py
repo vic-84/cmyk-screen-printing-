@@ -1,3 +1,4 @@
+import dataclasses
 import io
 import json
 import os
@@ -53,6 +54,32 @@ class CoreTests(unittest.TestCase):
         window.process_cmyk()
 
         self.assertEqual(window.channel_arrays["C"].shape, (15, 15))
+        window.close()
+
+    def test_channel_density_rescreens_only_that_channel_and_new_image_resets_settings(self):
+        window = SimpleHalftoneApp()
+        path = os.path.join(tempfile.mkdtemp(), "a.png")
+        cv2.imwrite(path, np.random.default_rng(0).integers(0, 255, (60, 80, 3), dtype=np.uint8))
+        window.load_image_file(path)
+        window.process_cmyk()
+        before = dict(window.preview_cache)
+
+        window.density_spins['M'].setValue(60)
+        window.rescreen_preview()
+        self.assertIs(window.preview_cache['C'], before['C'])
+        self.assertIsNot(window.preview_cache['M'], before['M'])
+        self.assertEqual(window.busy_label.text(), "")
+
+        window.channel_thresholds['C'] = 90
+        window.load_image_file(path)            # otra imagen: ajustes de inicio
+        self.assertEqual(window.density_spins['M'].value(), 100)
+        self.assertEqual(window.channel_thresholds['C'], 128)
+        self.assertEqual(dataclasses.replace(window.job_settings(), source_dpi=0.0), window._default_job)
+
+        window.clear_image()
+        self.assertIsNone(window.image)
+        self.assertFalse(window.preview_cache)
+        self.assertFalse(window.clear_image_btn.isEnabled())
         window.close()
 
     def test_selected_point_shape_is_mapped_to_the_halftone_engine(self):

@@ -1556,8 +1556,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         tree.expandAll()
         dialog.exec_()
 
-    def update_channel_list_ui(self):
-        """Puebla o actualiza los items en la lista de canales."""
+    def update_channel_list_ui(self, refresh=True):
+        """Puebla o actualiza los items en la lista de canales.
+
+        refresh=False evita redibujar la simulación cuando quien llama la redibuja después.
+        """
         self.channel_list.blockSignals(True)
         self.channel_list.clear()
         for ch in self.list_channels():
@@ -1568,7 +1571,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             # Rehacer la lista no debe perder el canal que se estaba editando
             item.setSelected(ch == self.current_channel)
         self.channel_list.blockSignals(False)
-        self.on_channel_selection_changed()
+        self.on_channel_selection_changed(refresh)
 
     def show_setup_wizard(self):
         """Muestra un diálogo para guiar al usuario en la configuración del trabajo."""
@@ -1662,7 +1665,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.channel_order = list(new_order) + hidden
         # La lista muestra el orden real (la base siempre va primero)
         selected = self.current_channel
-        self.update_channel_list_ui()
+        self.update_channel_list_ui(refresh=False)
         if selected:
             for i in range(self.channel_list.count()):
                 if self.channel_list.item(i).text() == selected:
@@ -1976,10 +1979,11 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         self.index_resolution_spin.setEnabled(mode == 'index')
         self.spot_tolerance_spin.setEnabled(mode == 'cmyk_spot')
         self.simulated_btn.setVisible(mode == 'spot')
-        self.set_spot_colors(self.spot_colors)
+        self.set_spot_colors(self.spot_colors, refresh=False)
         self.update_garment_black_controls()
-        self.update_channel_list_ui()
-        if self.image is not None and self.preview_cache:
+        reseparate = self.image is not None and self.preview_cache
+        self.update_channel_list_ui(refresh=not reseparate)
+        if reseparate:
             self.process_cmyk()
 
     def update_garment_black_controls(self):
@@ -1994,7 +1998,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
 
     def on_garment_black_changed(self, *_):
         self.update_garment_black_controls()
-        self.update_channel_list_ui()
+        self.update_channel_list_ui(refresh=not self.channel_arrays)
         self.schedule_reseparation()
 
     def schedule_reseparation(self, *_):
@@ -2015,7 +2019,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 'halftone': False, 'opaque': True, 'base': bool(default_needs_base(rgb, garment)),
                 'library': ''}
 
-    def set_spot_colors(self, spots):
+    def set_spot_colors(self, spots, refresh=True):
         """Reemplaza la paleta, sincroniza colores de simulación y orden (claro → oscuro)."""
         self.spot_colors = [dict(spot) for spot in spots]
         numbers = [int(sp['id'][1:]) for sp in self.spot_colors if sp['id'][1:].isdigit()]
@@ -2030,7 +2034,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
         else:
             self.channel_order = ['W'] + spot_ids + others
         self.refresh_spot_table()
-        self.update_channel_list_ui()
+        if refresh:
+            self.update_channel_list_ui()
 
     def refresh_spot_table(self):
         self.spot_table.blockSignals(True)
@@ -2380,7 +2385,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
                 self.set_base(None, color.getRgb()[:3])
             else:
                 self.channel_colors[channel] = color
-            self.update_channel_list_ui()
+            self.update_channel_list_ui(refresh=False)
             self.update_preview()
 
     def job_settings(self):
@@ -2756,7 +2761,7 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             self.channel_list.viewport().update()
             self.threshold_timer.start(0)
 
-    def on_channel_selection_changed(self):
+    def on_channel_selection_changed(self, refresh=True):
         """
         Maneja la selección en la lista de canales. Activa el slider si se
         selecciona un solo canal.
@@ -2789,7 +2794,8 @@ class SimpleHalftoneApp(QtWidgets.QMainWindow):
             # Si no hay un solo canal seleccionado, forzamos la vista de composición
             self.view_individual_channel_cb.setChecked(False)
 
-        self.update_preview()
+        if refresh:
+            self.update_preview()
 
     def generate_dot_gain_template(self):
         """
